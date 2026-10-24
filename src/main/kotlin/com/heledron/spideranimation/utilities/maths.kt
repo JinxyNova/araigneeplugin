@@ -102,7 +102,19 @@ class LineSegment(
     }
 }
 
+/** true si x, y et z sont tous finis (ni NaN ni infini). */
+fun Vector.isFiniteVector(): Boolean = x.isFinite() && y.isFinite() && z.isFinite()
+
+/** Normalise sans jamais produire de NaN : renvoie [fallback] si le vecteur est (quasi) nul ou non fini. */
+fun Vector.safeNormalize(fallback: Vector = Vector(0.0, 1.0, 0.0)): Vector {
+    val lenSq = lengthSquared()
+    if (!lenSq.isFinite() || lenSq < 1e-18) return fallback.clone()
+    return clone().multiply(1.0 / sqrt(lenSq))
+}
+
 fun World.raycastGround(position: Vector, direction: Vector, maxDistance: Double): RayTraceResult? {
+    if (!position.isFiniteVector() || !direction.isFiniteVector() || !maxDistance.isFinite()) return null
+    if (direction.lengthSquared() < 1e-12) return null
     val location = position.toLocation(this)
     return this.rayTraceBlocks(location, direction, maxDistance, FluidCollisionMode.NEVER, true)
 }
@@ -114,8 +126,9 @@ data class CollisionResult(
 )
 
 fun World.resolveCollision(position: Vector, direction: Vector): CollisionResult? {
-	if (direction.lengthSquared() < 1e-12) return null
-	
+    if (!position.isFiniteVector() || !direction.isFiniteVector()) return null
+    if (direction.lengthSquared() < 1e-12) return null
+
     val location = position.toLocation(this)
     val ray = this.rayTraceBlocks(location.subtract(direction), direction, direction.length(), FluidCollisionMode.NEVER, true)
         ?: return null

@@ -9,6 +9,8 @@ import com.heledron.spideranimation.utilities.ecs.ECSComponent
 import com.heledron.spideranimation.utilities.ecs.ECS
 import com.heledron.spideranimation.utilities.ecs.ECSEntity
 import com.heledron.spideranimation.utilities.raycastGround
+import com.heledron.spideranimation.utilities.isFiniteVector
+import com.heledron.spideranimation.utilities.safeNormalize
 import com.heledron.spideranimation.utilities.resolveCollision
 import com.heledron.spideranimation.utilities.maths.DOWN_VECTOR
 import com.heledron.spideranimation.utilities.maths.FORWARD_VECTOR
@@ -55,7 +57,7 @@ class SpiderBody(
             return gait.moving.clone()
         }
 
-        val speedFraction = velocity.length() / gait.maxSpeed
+        val speedFraction = if (gait.maxSpeed > 1e-9) (velocity.length() / gait.maxSpeed).coerceIn(0.0, 1.0) else 0.0
         return gait.stationary.clone().lerp(gait.moving, speedFraction)
     }
 
@@ -182,7 +184,38 @@ class SpiderBody(
         preferredOrientation = Quaternionf(heading).rotateX(preferredPitch).rotateZ(preferredRoll)
     }
 
+    // dernier état fini connu, pour se rattraper en cas de NaN / infini
+    private val lastGoodPosition = position.clone()
+    private val lastGoodOrientation = Quaternionf(orientation)
+
+    private fun stateIsFinite(): Boolean =
+        position.isFiniteVector() &&
+        velocity.isFiniteVector() &&
+        rotationalVelocity.isFinite() &&
+        orientation.x.isFinite() && orientation.y.isFinite() && orientation.z.isFinite() && orientation.w.isFinite()
+
+    private fun restoreLastGoodState() {
+        position.copy(lastGoodPosition)
+        velocity.setX(0.0).setY(0.0).setZ(0.0)
+        rotationalVelocity.set(0f, 0f, 0f)
+        orientation.set(lastGoodOrientation)
+        preferredOrientation = Quaternionf(lastGoodOrientation)
+        contactAcceleration = Vector(0.0, 0.0, 0.0)
+        contact = null
+    }
+
     fun update(ecs: ECS, entity: ECSEntity, options: SpiderOptions) {
+        if (!stateIsFinite()) restoreLastGoodState()
+        updateInternal(ecs, entity, options)
+        if (stateIsFinite()) {
+            lastGoodPosition.copy(position)
+            lastGoodOrientation.set(orientation)
+        } else {
+            restoreLastGoodState()
+        }
+    }
+
+    private fun updateInternal(ecs: ECS, entity: ECSEntity, options: SpiderOptions) {
         val gait = options.gait
 
         if (lastAppliedBodyPlan !== options.bodyPlan) {
@@ -195,7 +228,7 @@ class SpiderBody(
         val upAxis = UP_VECTOR.rotate(preferredOrientation)
 
         val groundedLegs = legs.filter { it.isGrounded() }
-        val fractionOfLegsGrounded = groundedLegs.size.toDouble() / legs.size
+        val fractionOfLegsGrounded = if (legs.isEmpty()) 0.0 else groundedLegs.size.toDouble() / legs.size
 
         val acceleration = Vector(0.0, -gait.gravityAcceleration, 0.0)
 
@@ -226,7 +259,7 @@ class SpiderBody(
 
             if (overhang > 1e-6) {
                 // axis = horizontal lever × down: rotating about it drops the centre of mass
-                val axis = horizontalLever.crossProduct(gravityDir).normalize()
+                val axis = horizontalLever.crossProduct(gravityDir).safeNormalize()
                 val angularAcceleration = gait.topplingAcceleration * overhang
                 rotationalVelocity.add(axis.toVector3f().mul(angularAcceleration.toFloat()))
             }
@@ -236,7 +269,7 @@ class SpiderBody(
         if (contact != null) {
             val preferredPosition = calcPreferredPosition(gait)
 
-            val n = contact.supportAxis.clone().normalize()
+            val n = contact.supportAxis.safeNormalize(upAxis)
             val gripLimit = 
                 if (!gait.grip) 0.0 else 
                 gait.gripAcceleration * fractionOfLegsGrounded
@@ -266,7 +299,7 @@ class SpiderBody(
             // cancel tangential gravity
             val traction = gravityTangent.multiply(-1.0)
             if (traction.lengthSquared() > gripLimit * gripLimit) {
-                traction.normalize().multiply(gripLimit)
+                traction.safeNormalize(Vector(0.0, 0.0, 0.0)).multiply(gripLimit)
             }
 
             contactAcceleration = n.clone().multiply(support + adhesion).add(traction)
@@ -358,11 +391,14 @@ class SpiderBody(
     private fun calcContact(gait: Gait): ContactInfo? {
         val up = UP_VECTOR.rotate(gait.scanOrientation.get(this)).normalize()
 
+        if (legs.isEmpty()) return null
         val centreOfMass = legs.map { it.endEffector }.average()
         centreOfMass.lerp(position, 0.5)
         centreOfMass.add(up.clone().multiply(0.01))
 
-        val groundedLegs = legsInPolygonalOrder().map { legs[it] }.filter { it.isGrounded() }
+        if (!centreOfMass.isFiniteVector()) return null
+
+        val groundedLegs = legsInPolygonalOrder().map { legs[it] }.filter { it.isGrounded() && it.endEffector.isFiniteVector() }
         if (groundedLegs.isEmpty()) return null
 
         val legsPolygon = groundedLegs.map { it.endEffector.clone() }
@@ -370,7 +406,7 @@ class SpiderBody(
         if (legsPolygon.size == 1) {
             val centerOfPressure = groundedLegs.first().endEffector.clone()
             return ContactInfo(
-                supportAxis = centreOfMass.clone().subtract(centerOfPressure).normalize(),
+                supportAxis = centreOfMass.clone().subtract(centerOfPressure).safeNormalize(up),
                 centerOfPressure = centerOfPressure,
                 centreOfMass = centreOfMass,
                 contactPolygon = legsPolygon,
@@ -407,7 +443,7 @@ class SpiderBody(
         val nearest = nearestPointInPolygon(centre2D, polygon2D)
         val centerOfPressure = unProject(nearest)
         return ContactInfo(
-            supportAxis = centreOfMass.clone().subtract(centerOfPressure).normalize(),
+            supportAxis = centreOfMass.clone().subtract(centerOfPressure).safeNormalize(up),
             centerOfPressure = centerOfPressure,
             centreOfMass = centreOfMass,
             contactPolygon = legsPolygon,
