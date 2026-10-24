@@ -56,7 +56,8 @@ object Horror {
      */
     fun spawn(world: World, ground: Vector, facing: Vector?, scale: Double?, autoSpawned: Boolean = false): ECSEntity {
         val cfg = config
-        val startScale = (scale ?: 1.0).coerceIn(0.2, 8.0)
+        if (cfg.singleSpider) allSpiders().forEach { it.remove() }   // une seule araignée à la fois
+        val startScale = (scale ?: cfg.scaleStart).coerceIn(0.2, 8.0)
         val options = HorrorSpiderFactory.createOptions(cfg, startScale)
 
         val position = ground.clone().add(UP_VECTOR.multiply(options.walkGait.stationary.bodyHeight))
@@ -67,6 +68,11 @@ object Horror {
         val cloak = Cloak()
         cloak.tint = cfg.calmColors.random()
         cloak.tintVariation = cfg.colorVariation
+        if (cfg.camouflageEnabled) {
+            cloak.active = true   // camouflée dès l'apparition
+            options.cloak.lerpSpeed = cfg.camouflageFadeSpeed
+            options.cloak.lerpRandomness = cfg.camouflageFadeSpeed * 1.2
+        }
 
         return AppState.ecs.spawn(
             SpiderBody.create(world, position, orientation),
@@ -123,6 +129,9 @@ private fun setupAutoSpawn() {
         val world = player.world
 
         if (cfg.autoSpawnOnlyAtNight && world.time !in 13000L..23000L) return@interval
+
+        // une seule araignée au total
+        if (Horror.allSpiders().size >= cfg.autoSpawnMaxTotal) return@interval
 
         // pas plus de N araignées autour de ce joueur
         val range = cfg.followRange

@@ -12,7 +12,13 @@ import org.bukkit.Bukkit
 import org.bukkit.FluidCollisionMode
 import org.bukkit.GameMode
 import org.bukkit.Sound
+import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.format.NamedTextColor
+import net.kyori.adventure.title.Title
 import org.bukkit.entity.Player
+import org.bukkit.potion.PotionEffect
+import org.bukkit.potion.PotionEffectType
+import java.time.Duration
 import org.bukkit.util.Vector
 import java.util.UUID
 import kotlin.math.abs
@@ -20,6 +26,7 @@ import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.pow
+import kotlin.math.sin
 import kotlin.random.Random
 
 enum class HorrorState {
@@ -46,7 +53,10 @@ class HorrorBehavior(var autoSpawned: Boolean = false) : ECSComponent {
     private var targetScale = 1.0
     private var scaleStepsLeft = 0
     private var scaleStepDelay = 0
-    private var ticksUntilScaleChange = Horror.config.scaleInterval.randomTicks()
+    // premier changement de taille tardif : elle reste petite un moment après son apparition
+    private var ticksUntilScaleChange = SecondsRange(15.0, 30.0).randomTicks()
+
+    private var cloak: Cloak? = null
 
     // regard insistant
     private var lookCount = 0
@@ -58,6 +68,8 @@ class HorrorBehavior(var autoSpawned: Boolean = false) : ECSComponent {
     private var farMode = false
     private var speedPhaseTicks = 0
     private var speedFactor = 1.0
+    private var burst = false
+    private var unseenTicks = 0
     private var ambientTicks = Horror.config.ambientInterval.randomTicks()
 
     // couleur
@@ -98,7 +110,8 @@ class HorrorBehavior(var autoSpawned: Boolean = false) : ECSComponent {
         }
 
         tickScale(spider, options, cfg)
-        tickColor(entity.query<Cloak>(), cfg)
+        cloak = entity.query<Cloak>()
+        tickColor(cloak, cfg)
 
         val player = findTarget(spider, cfg)
         if (player == null) {
@@ -122,18 +135,25 @@ class HorrorBehavior(var autoSpawned: Boolean = false) : ECSComponent {
             HorrorState.STALK -> {
                 if (calmTicks > 0) calmTicks--
                 val closest = cfg.closestApproach + footprint
+                val seen = isSeenBy(player, spider, cfg)
+                if (seen) unseenTicks = 0 else unseenTicks++
 
                 // de très loin : elle avance vite ; de près : lentement
                 farMode = if (farMode) distance > cfg.farDistance * 0.8 else distance > cfg.farDistance
                 if (farMode) {
                     options.gallop = true
                     locomotion.walk(flat.clone().multiply(minOf(options.gait.maxSpeed, cfg.farSpeed)))
+                } else if (burst && !seen && distance > closest + 3.0) {
+                    // petit sprint quand le joueur ne regarde pas
+                    options.gallop = true
+                    locomotion.walk(flat.clone().multiply(minOf(options.gait.maxSpeed, cfg.burstSpeed)))
                 } else {
                     options.gallop = false
 
                     // phases aléatoires : elle ralentit, parfois s'arrête net, puis repart
                     if (--speedPhaseTicks <= 0) {
                         speedPhaseTicks = cfg.stalkPhase.randomTicks()
+                        burst = Random.nextDouble() < cfg.burstChance
                         speedFactor = if (Random.nextDouble() < cfg.stalkStopChance) 0.0
                         else cfg.stalkMinFactor + Random.nextDouble() * (1.0 - cfg.stalkMinFactor)
                     }
@@ -155,7 +175,15 @@ class HorrorBehavior(var autoSpawned: Boolean = false) : ECSComponent {
                     }
                 }
 
-                if (calmTicks <= 0 && isSeenBy(player, spider, cfg)) {
+                // embuscade : si le joueur ne la voit plus depuis un moment, elle réapparaît dans son dos
+                if (!seen && distance > 25.0 && unseenTicks > cfg.ambushUnseenTicks &&
+                    Random.nextDouble() < cfg.ambushChancePerSecond / 20.0 &&
+                    ambush(entity, spider, options, player, cfg)
+                ) {
+                    unseenTicks = 0
+                }
+
+                if (calmTicks <= 0 && seen) {
                     switchState(HorrorState.FREEZE, spider, options, player, cfg)
                 }
             }
@@ -256,11 +284,29 @@ class HorrorBehavior(var autoSpawned: Boolean = false) : ECSComponent {
         stateTicks = 0
         colorDirty = true
 
+        // camouflage : elle se fond dans le décor, et se révèle (avec un "glitch") quand elle charge
+        val c = cloak
+        if (c != null && cfg.camouflageEnabled) {
+            if (new == HorrorState.CHARGE && cfg.revealOnCharge) {
+                if (c.active) {
+                    c.active = false
+                    c.breakCloak(options.cloak)
+                }
+            } else {
+                c.active = true
+            }
+        }
+
         when (new) {
             HorrorState.FREEZE -> {
                 freezeDuration = cfg.freezeTime.randomTicks()
                 stareTicks = 0
                 rushed = false
+
+                // quand on la regarde, elle peut gonfler sous tes yeux
+                if (cfg.scaleEnabled && Random.nextDouble() < cfg.growWhenSeenChance) {
+                    startScaleChange(spider, options, cfg, preferBigger = true)
+                }
 
                 // trop de regards récents : elle ne patiente plus, charge dans 1 à 3 s
                 lookCount++
@@ -291,6 +337,7 @@ class HorrorBehavior(var autoSpawned: Boolean = false) : ECSComponent {
 
     private fun attack(player: Player, spider: SpiderBody, options: SpiderOptions, direction: Vector, cfg: HorrorConfig) {
         spiderSound(spider, options, cfg, Sound.ENTITY_SPIDER_HURT, 2.0f, 0.7f)
+        if (cfg.screamerEnabled) screamer(player, spider, options, cfg)
 
         if (cfg.attackDamage > 0.0) player.damage(cfg.attackDamage)
 
@@ -298,6 +345,57 @@ class HorrorBehavior(var autoSpawned: Boolean = false) : ECSComponent {
             val push = direction.clone().multiply(cfg.attackKnockback)
             push.y = 0.3
             player.velocity = player.velocity.add(push)
+        }
+    }
+
+    /** Se téléporte dans le dos du joueur (20 à 35 blocs), là où il ne regarde pas. */
+    private fun ambush(entity: ECSEntity, spider: SpiderBody, options: SpiderOptions, player: Player, cfg: HorrorConfig): Boolean {
+        val look = player.location.direction.clone()
+        look.y = 0.0
+        if (look.lengthSquared() < 1e-6) return false
+        look.normalize()
+
+        // derrière lui, avec +/- 40 degrés
+        val angle = Math.PI + (Random.nextDouble() - 0.5) * Math.toRadians(80.0)
+        val dx = look.x * cos(angle) - look.z * sin(angle)
+        val dz = look.x * sin(angle) + look.z * cos(angle)
+        val distance = cfg.ambushMinDistance + Random.nextDouble() * (cfg.ambushMaxDistance - cfg.ambushMinDistance)
+
+        val bx = Math.floor(player.location.x + dx * distance).toInt()
+        val bz = Math.floor(player.location.z + dz * distance).toInt()
+        val world = spider.world
+        if (!world.isChunkLoaded(bx shr 4, bz shr 4)) return false
+
+        val y = world.getHighestBlockYAt(bx, bz)
+        val top = world.getBlockAt(bx, y, bz)
+        if (top.isLiquid || !top.type.isSolid) return false
+
+        val target = Vector(bx + 0.5, y + 1.0 + options.walkGait.stationary.bodyHeight, bz + 0.5)
+        spider.teleport(entity, target)
+        return true
+    }
+
+    /** Screamer : cri, écran noir/flash, titre rouge, et l'araignée devient énorme face au joueur. */
+    private fun screamer(player: Player, spider: SpiderBody, options: SpiderOptions, cfg: HorrorConfig) {
+        if (cfg.soundsEnabled) {
+            player.playSound(player.location, Sound.ENTITY_GHAST_SCREAM, 2.0f, 0.6f)
+            player.playSound(player.location, Sound.ENTITY_WARDEN_ROAR, 1.5f, 1.2f)
+            player.playSound(player.location, Sound.ENTITY_SPIDER_AMBIENT, 2.0f, 0.5f)
+        }
+
+        player.addPotionEffect(PotionEffect(PotionEffectType.BLINDNESS, cfg.screamerBlindTicks, 0, false, false, false))
+        player.addPotionEffect(PotionEffect(PotionEffectType.DARKNESS, cfg.screamerDarkTicks, 0, false, false, false))
+        player.showTitle(
+            Title.title(
+                Component.text("☠", NamedTextColor.DARK_RED),
+                Component.empty(),
+                Title.Times.times(Duration.ZERO, Duration.ofMillis(800), Duration.ofMillis(500)),
+            )
+        )
+
+        if (cfg.screamerGrow && cfg.scaleEnabled) {
+            setScaleNow(spider, options, cfg.scaleMax)
+            ticksUntilScaleChange = SecondsRange(3.0, 6.0).randomTicks() // elle rétrécit de nouveau peu après
         }
     }
 
@@ -337,8 +435,9 @@ class HorrorBehavior(var autoSpawned: Boolean = false) : ECSComponent {
 
     private fun startScaleChange(spider: SpiderBody, options: SpiderOptions, cfg: HorrorConfig, preferBigger: Boolean) {
         val current = options.bodyPlan.scale
-        val hi = cfg.scaleMax
-        val lo = if (preferBigger) maxOf(cfg.scaleMin, minOf(current * 1.3, hi)) else cfg.scaleMin
+        // calme : reste petite ; charge : grossit nettement
+        val hi = if (preferBigger) cfg.scaleMax else minOf(cfg.scaleMax, cfg.scaleCalmMax)
+        val lo = if (preferBigger) minOf(maxOf(current * 2.0, 1.5), hi) else cfg.scaleMin
 
         // tirage log-uniforme : autant de chances de grandir que de rétrécir, en proportion
         var target = current

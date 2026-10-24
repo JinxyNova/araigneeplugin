@@ -4,6 +4,9 @@ Basé sur le dépôt https://github.com/TheCymaera/minecraft-spider (licence : u
 Tout le code d'origine est conservé ; l'ajout est dans `src/main/kotlin/com/heledron/spideranimation/horror/`.
 
 ## Ce qu'elle fait
+**IA qui fait peur** : elle peut devenir grande quand elle veut (souvent quand on la regarde), réapparaît **dans ton dos** si tu ne la vois plus depuis un moment, et fait de petits **sprints** quand tu ne regardes pas (section `ai` de `config.yml`).
+**Une seule araignée à la fois.** Elle apparaît **petite**, **camouflée** (elle prend la couleur du décor derrière elle, seuls les yeux rouges restent visibles), et se révèle quand elle charge. Au contact : **screamer** (cri, écran noir, titre rouge, araignée énorme).
+
 0. **Apparition automatique** fréquente, à 1 à 15 chunks de toi (config `auto-spawn`). Elle peut disparaître en pleine course, une autre revient ensuite.
 1. **Approche** : rapide de très loin, puis lente, avec des ralentissements et des arrêts aléatoires, et des sifflements d'ambiance (elle s'arrête à ~5 blocs et te fixe).
 2. Dès que **le joueur la voit** (dans son champ de vision, sans bloc entre eux), elle **se fige 1 à 10 secondes** (durée aléatoire).

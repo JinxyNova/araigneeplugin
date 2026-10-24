@@ -50,8 +50,10 @@ behavior:
 
 scale:
   enabled: true
-  min: 0.5                      # taille minimale (1 = taille normale)
-  max: 3.0                      # taille maximale
+  start: 0.5                    # taille à l'apparition : petite, c'est plus flippant
+  calm-max: 3.0                 # taille max des changements aléatoires (3.0 = elle peut devenir grande quand elle veut)
+  min: 0.4                      # taille minimale (1 = taille normale)
+  max: 3.0                      # taille maximale (atteinte quand elle charge / au screamer)
   change-interval:              # délai aléatoire entre deux changements de taille
     min: 4.0
     max: 14.0
@@ -59,6 +61,36 @@ scale:
   ticks-per-step: 2
   grow-on-charge: true          # elle grossit quand elle se met à charger
 
+# IA : comportements qui font peur
+ai:
+  grow-when-seen-chance: 0.5    # probabilité qu'elle gonfle quand on la regarde
+  ambush:                       # réapparaît dans ton dos quand tu ne la vois plus depuis un moment
+    chance-per-second: 0.04
+    unseen-seconds: 6.0
+    min-distance: 20.0
+    max-distance: 35.0
+  burst:                        # petits sprints quand tu ne regardes pas
+    chance: 0.2
+    speed: 0.28
+
+# Camouflage : les pièces du corps prennent la couleur du décor derrière elle (vu depuis le joueur).
+# Elle se révèle (avec un effet "glitch") quand elle se met à charger. Les yeux restent rouges.
+camouflage:
+  enabled: true
+  fade-speed: 0.15              # vitesse du fondu avec le décor
+  reveal-on-charge: true
+
+# Screamer au moment où elle t'atteint : cri, écran noir, titre rouge, araignée énorme
+screamer:
+  enabled: true
+  grow-to-max: true
+  blindness-seconds: 1.5
+  darkness-seconds: 4.0
+
+# true = une seule araignée à la fois (/horror spawn remplace l'ancienne)
+single-spider: true
+
+# Couleurs utilisées quand le camouflage est coupé ou pendant la charge
 colors:
   enabled: true
   fade-speed: 0.04              # vitesse du fondu entre deux couleurs (petit = lent et inquiétant)
@@ -96,5 +128,6 @@ auto-spawn:
   only-at-night: false
   min-chunks: 1.0               # distance d'apparition : de 1 à 15 chunks du joueur
   max-chunks: 15.0
-  max-per-player: 2
+  max-per-player: 1
+  max-total: 1                  # nombre total d'araignées sur le serveur
   despawn-seconds: 60.0         # disparaît si aucun joueur n'est à portée pendant ce temps

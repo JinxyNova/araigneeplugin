@@ -76,8 +76,10 @@ class HorrorConfig(c: FileConfiguration) {
 
     // --- taille aléatoire -----------------------------------------------------
     val scaleEnabled = c.getBoolean("scale.enabled", true)
-    val scaleMin = c.getDouble("scale.min", 0.5).coerceAtLeast(0.2)
+    val scaleMin = c.getDouble("scale.min", 0.4).coerceAtLeast(0.2)
     val scaleMax = c.getDouble("scale.max", 3.0).coerceAtLeast(scaleMin)
+    val scaleStart = c.getDouble("scale.start", 0.5).coerceIn(0.2, 8.0)       // taille à l'apparition (petite = plus flippant)
+    val scaleCalmMax = c.getDouble("scale.calm-max", 3.0).coerceAtLeast(scaleMin) // taille max tant qu'elle ne charge pas
     val scaleInterval = SecondsRange(
         c.getDouble("scale.change-interval.min", 4.0),
         c.getDouble("scale.change-interval.max", 14.0),
@@ -85,6 +87,28 @@ class HorrorConfig(c: FileConfiguration) {
     val scaleSteps = c.getInt("scale.transition-steps", 8).coerceAtLeast(1)
     val scaleStepTicks = c.getInt("scale.ticks-per-step", 2).coerceAtLeast(1)
     val scaleOnCharge = c.getBoolean("scale.grow-on-charge", true)
+
+    // --- IA : comportements qui font peur ---------------------------------------
+    val growWhenSeenChance = c.getDouble("ai.grow-when-seen-chance", 0.5)
+    val ambushChancePerSecond = c.getDouble("ai.ambush.chance-per-second", 0.04)
+    val ambushUnseenTicks = (c.getDouble("ai.ambush.unseen-seconds", 6.0) * 20).toInt().coerceAtLeast(20)
+    val ambushMinDistance = c.getDouble("ai.ambush.min-distance", 20.0)
+    val ambushMaxDistance = c.getDouble("ai.ambush.max-distance", 35.0).coerceAtLeast(ambushMinDistance)
+    val burstChance = c.getDouble("ai.burst.chance", 0.2)
+    val burstSpeed = c.getDouble("ai.burst.speed", 0.28)
+
+    // --- camouflage (fond dans le décor) --------------------------------------
+    val camouflageEnabled = c.getBoolean("camouflage.enabled", true)
+    val camouflageFadeSpeed = c.getDouble("camouflage.fade-speed", 0.15)
+    val revealOnCharge = c.getBoolean("camouflage.reveal-on-charge", true)
+
+    // --- screamer -------------------------------------------------------------
+    val screamerEnabled = c.getBoolean("screamer.enabled", true)
+    val screamerGrow = c.getBoolean("screamer.grow-to-max", true)
+    val screamerBlindTicks = (c.getDouble("screamer.blindness-seconds", 1.5) * 20).toInt().coerceAtLeast(1)
+    val screamerDarkTicks = (c.getDouble("screamer.darkness-seconds", 4.0) * 20).toInt().coerceAtLeast(1)
+
+    val singleSpider = c.getBoolean("single-spider", true)
 
     // --- couleurs -------------------------------------------------------------
     val colorsEnabled = c.getBoolean("colors.enabled", true)
@@ -121,6 +145,7 @@ class HorrorConfig(c: FileConfiguration) {
     val autoSpawnOnlyAtNight = c.getBoolean("auto-spawn.only-at-night", false)
     val autoSpawnMinChunks = c.getDouble("auto-spawn.min-chunks", 1.0).coerceAtLeast(0.5)
     val autoSpawnMaxChunks = c.getDouble("auto-spawn.max-chunks", 15.0).coerceAtLeast(autoSpawnMinChunks)
-    val autoSpawnMaxSpiders = c.getInt("auto-spawn.max-per-player", 2)
+    val autoSpawnMaxSpiders = c.getInt("auto-spawn.max-per-player", 1)
+    val autoSpawnMaxTotal = c.getInt("auto-spawn.max-total", 1)
     val autoDespawnTicks = (c.getDouble("auto-spawn.despawn-seconds", 60.0) * 20).toInt().coerceAtLeast(20)
 }
