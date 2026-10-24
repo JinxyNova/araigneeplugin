@@ -1,0 +1,100 @@
+# ============================================================================
+#  Araignée d'horreur - configuration
+#  Après modification : /horror reload  (ou redémarrer le serveur)
+#  Les durées sont en secondes, les vitesses en blocs par tick (20 ticks = 1 s).
+# ============================================================================
+
+behavior:
+  follow-range: 260.0           # distance max à laquelle elle suit un joueur (15 chunks = 240 blocs)
+  see-range: 64.0               # distance max à laquelle le joueur peut la "voir"
+  see-angle: 55.0               # demi-angle du champ de vision, en degrés (plus grand = elle est vue plus facilement)
+  require-line-of-sight: true   # false = elle est "vue" même à travers un mur
+  ignore-creative: false        # true = ignore les joueurs en créatif
+  closest-approach: 5.0         # distance où elle s'arrête et fixe le joueur tant qu'il ne l'a pas vue
+
+  # Approche : de très loin elle avance vite, de près elle avance doucement
+  far-distance: 70.0            # au-delà, elle se déplace à far-speed
+  far-speed: 0.3
+  stalk-phase-seconds:          # toutes les 1 à 4 s elle change de vitesse...
+    min: 1.0
+    max: 4.0
+  stalk-stop-chance: 0.25       # ...et s'arrête net avec cette probabilité
+  stalk-min-speed-factor: 0.15  # sinon elle ralentit jusqu'à 15 % de sa vitesse de marche
+
+  # Regard insistant : si tu la fixes trop longtemps ou trop souvent, elle ne patiente plus
+  aggro:
+    stare-seconds: 3.0          # fixée en continu pendant ce temps (après s'être figée) -> elle charge
+    looks-limit: 3              # plus de 3 regards récents -> elle charge juste après le suivant
+    looks-decay-seconds: 30.0   # le compteur de regards baisse de 1 toutes les 30 s
+    rush-seconds:               # délai avant la charge dans ces deux cas
+      min: 1.0
+      max: 3.0
+
+  # Chance par seconde qu'elle disparaisse en pleine charge (0 = jamais)
+  vanish-during-charge-chance-per-second: 0.15
+
+  freeze-seconds:               # attente après avoir été vue, tirée au hasard, avant de charger
+    min: 1.0
+    max: 10.0
+
+  charge-max-seconds: 7.0       # durée max d'une charge avant qu'elle abandonne
+  stalk-speed: 0.05             # marche lente (taille 1) -> ~1 bloc/s
+  charge-speed: 0.4             # course (taille 1) -> ~8 blocs/s
+  charge-speed-cap: 0.6         # vitesse de course maximale, même quand elle est géante
+
+  attack:
+    range: 1.0                  # portée de l'attaque (s'ajoute à la taille des pattes)
+    damage: 4.0                 # 4.0 = 2 coeurs. Mettre 0 pour un simple jumpscare sans dégâts
+    knockback: 0.6
+    calm-seconds: 2.0           # après une attaque, elle ne peut pas se figer de nouveau pendant ce temps
+
+scale:
+  enabled: true
+  min: 0.5                      # taille minimale (1 = taille normale)
+  max: 3.0                      # taille maximale
+  change-interval:              # délai aléatoire entre deux changements de taille
+    min: 4.0
+    max: 14.0
+  transition-steps: 8           # nombre de "paliers" pour grandir/rétrécir (1 = changement instantané)
+  ticks-per-step: 2
+  grow-on-charge: true          # elle grossit quand elle se met à charger
+
+colors:
+  enabled: true
+  fade-speed: 0.04              # vitesse du fondu entre deux couleurs (petit = lent et inquiétant)
+  piece-variation: 0.03         # légère variation de ton entre les pièces du corps
+  change-interval:
+    min: 3.0
+    max: 9.0
+  # Couleurs en hexadécimal. Une couleur est tirée au hasard selon l'état de l'araignée.
+  calm:                         # marche lente
+    - "#0a0a0a"
+    - "#14081f"
+    - "#0c1a0c"
+    - "#1c0a0a"
+  alert:                        # figée, juste après avoir été vue
+    - "#5c0000"
+    - "#c9c3a5"
+    - "#3b0f4d"
+  charge:                       # pendant la charge
+    - "#ff1111"
+    - "#a30000"
+    - "#e8e8e8"
+
+sounds:
+  enabled: true
+  ambient-seconds:              # sifflements d'ambiance qui viennent de sa direction
+    min: 6.0
+    max: 20.0
+
+# Apparition automatique près des joueurs. Désactive avec enabled: false
+# (le délai check-seconds n'est lu qu'au démarrage du serveur)
+auto-spawn:
+  enabled: true
+  check-seconds: 6.0
+  chance: 0.7                   # probabilité à chaque vérification
+  only-at-night: false
+  min-chunks: 1.0               # distance d'apparition : de 1 à 15 chunks du joueur
+  max-chunks: 15.0
+  max-per-player: 2
+  despawn-seconds: 60.0         # disparaît si aucun joueur n'est à portée pendant ce temps

@@ -1,0 +1,189 @@
+package com.heledron.spideranimation.spider.components
+
+import com.heledron.spideranimation.spider.components.body.SpiderBody
+import com.heledron.spideranimation.spider.configuration.CloakOptions
+import com.heledron.spideranimation.spider.configuration.SpiderOptions
+import com.heledron.spideranimation.utilities.ecs.ECSComponent
+import com.heledron.spideranimation.utilities.ecs.ECS
+import com.heledron.spideranimation.utilities.ecs.ECSEntity
+import com.heledron.spideranimation.utilities.block_colors.findBlockWithColor
+import com.heledron.spideranimation.utilities.block_colors.getBlockColor
+import com.heledron.spideranimation.utilities.colors.Oklab
+import com.heledron.spideranimation.utilities.colors.distanceTo
+import com.heledron.spideranimation.utilities.colors.toOklab
+import com.heledron.spideranimation.utilities.raycastGround
+import com.heledron.spideranimation.utilities.events.SeriesScheduler
+import com.heledron.spideranimation.utilities.events.runLater
+import com.heledron.spideranimation.utilities.maths.DOWN_VECTOR
+import com.heledron.spideranimation.utilities.overloads.eyePosition
+import org.bukkit.*
+import org.bukkit.block.data.BlockData
+import org.bukkit.entity.Display
+import org.bukkit.util.RayTraceResult
+import org.bukkit.util.Vector
+import java.util.WeakHashMap
+
+class CloakDamageEvent(val entity: ECSEntity, val spider: SpiderBody, val cloak: Cloak)
+
+class CloakToggleEvent(val entity: ECSEntity, val spider: SpiderBody)
+
+class Cloak : ECSComponent {
+    var active = false
+    private var cloakColor = WeakHashMap<Any, Oklab>()
+    private var cloakOverride = WeakHashMap<Any, BlockData>()
+    private var cloakGlitching = false
+
+    /**
+     * [HORREUR] Teinte permanente appliquée aux pièces taguées "cloak" quand le camouflage est inactif.
+     * Le changement de couleur se fait en fondu (voir CloakOptions.lerpSpeed).
+     */
+    var tint: Oklab? = null
+
+    /** [HORREUR] Variation de luminosité stable par pièce (évite un aplat uniforme). */
+    var tintVariation = 0f
+
+    private fun tintFor(id: Any): Oklab? {
+        val base = tint ?: return null
+        if (tintVariation == 0f) return base
+
+        var h = id.hashCode()
+        h = h xor (h ushr 16)
+        h *= 0x45d9f3b
+        h = h xor (h ushr 16)
+        val unit = (h and 0xFFFF) / 32767.5f - 1f
+        return Oklab((base.l + unit * tintVariation).coerceIn(0f, 1f), base.a, base.b, base.alpha)
+    }
+
+    fun toggleCloak(app: ECS, entity: ECSEntity) {
+        val spider = entity.query<SpiderBody>() ?: return
+        active = !active
+        app.emit(CloakToggleEvent(entity = entity, spider = spider))
+    }
+
+    fun getPiece(id: Any, world: World, position: Vector, originalBlock: BlockData, originalBrightness: Display.Brightness?, options: CloakOptions): Pair<BlockData, Display.Brightness?> {
+        applyCloak(id, world, position, originalBlock, originalBrightness?.skyLight ?: 15, options)
+
+        val override = cloakOverride[id]
+        if (override != null) return override to Display.Brightness(0, 15)
+
+        val cloakColor = cloakColor[id] ?: return originalBlock to originalBrightness
+        val match = findBlockWithColor(cloakColor.toRGB(), options.allowCustomBrightness)
+        return match.block to Display.Brightness(0, match.brightness)
+    }
+
+    private fun applyCloak(id: Any, world: World, position: Vector, originalBlock: BlockData, originalBrightness: Int, options: CloakOptions) {
+        if (cloakGlitching) return
+
+        fun groundCast(): RayTraceResult? {
+            return world.raycastGround(position, DOWN_VECTOR, 5.0)
+        }
+
+        fun cast(): RayTraceResult? {
+            val targetPlayer = Bukkit.getOnlinePlayers().firstOrNull() ?: return groundCast()
+
+            val direction = position.clone().subtract(targetPlayer.eyePosition)
+            return world.raycastGround(position, direction, 30.0)
+        }
+
+        val originalColor = getBlockColor(originalBlock, originalBrightness)?.toOklab() ?: return
+        val currentColor = cloakColor[id] ?: originalColor
+
+        val targetColor = run getTargetColor@{
+            if (!active) return@getTargetColor tintFor(id) ?: originalColor
+
+            val rayTrace = cast() ?: return@getTargetColor currentColor
+            val block = rayTrace.hitBlock?.blockData ?: return@getTargetColor currentColor
+            val lightLevel = 15
+            getBlockColor(block, lightLevel)?.toOklab() ?: currentColor
+        }
+
+
+        val lerpAmount = options.lerpSpeed.toFloat() + (Math.random().toFloat() - 0.5f) * options.lerpRandomness.toFloat()
+        val newColor = currentColor
+            .lerp(targetColor, lerpAmount.coerceIn(0f, 1f))
+            .moveTowards(targetColor, options.moveSpeed.toFloat())
+
+        if (newColor == originalColor) cloakColor.remove(id)
+        else cloakColor[id] = newColor
+    }
+
+
+    fun breakCloak(options: CloakOptions) {
+        cloakGlitching = true
+
+        val originalColors = cloakColor.values.toList()
+
+        val glitch = listOf(
+            { id: Any -> cloakOverride[id] = Material.LIGHT_BLUE_GLAZED_TERRACOTTA.createBlockData() },
+            { id: Any -> cloakOverride[id] = Material.CYAN_GLAZED_TERRACOTTA.createBlockData() },
+            { id: Any -> cloakOverride[id] = Material.WHITE_GLAZED_TERRACOTTA.createBlockData() },
+            { id: Any -> cloakOverride[id] = Material.GRAY_GLAZED_TERRACOTTA.createBlockData() },
+
+            { id: Any -> cloakOverride[id] = null },
+            { id: Any -> cloakColor[id] = originalColors.random() },
+        )
+
+        var maxTime = 0
+
+        for ((id) in cloakColor) {
+            val scheduler = SeriesScheduler()
+
+            fun randomSleep(min: Int, max: Int) {
+                scheduler.sleep((min + Math.random() * (max - min)).toLong())
+            }
+
+            randomSleep(0, 3)
+            for (i in 0 until (Math.random() * 4).toInt()) {
+                scheduler.run { glitch.random()(id) }
+                scheduler.sleep(2L)
+            }
+
+            scheduler.run {
+                cloakColor[id] = null
+                cloakOverride[id] = null
+            }
+
+            if (Math.random() < 1.0 / 6) continue
+
+            randomSleep(0, 3)
+
+            for (i in 0 until  (Math.random() * 3).toInt()) {
+                scheduler.run {
+                    cloakOverride[id] = findBlockWithColor(originalColors.random().toRGB(), options.allowCustomBrightness).block
+                }
+
+                randomSleep(5, 15)
+
+                scheduler.run {
+                    cloakOverride[id] = null
+                }
+                scheduler.sleep(2L)
+            }
+
+            if (scheduler.time > maxTime) maxTime = scheduler.time.toInt()
+        }
+
+        runLater(maxTime.toLong()) {
+            cloakGlitching = false
+        }
+    }
+}
+
+private fun Oklab.moveTowards(target: Oklab, maxDelta: Float): Oklab {
+    val delta = this.distanceTo(target)
+    if (delta <= maxDelta) return target
+    val t = maxDelta / delta
+    return this.lerp(target, t)
+}
+
+fun setupCloak(app: ECS) {
+    app.onEvent<TridentHitEvent> { event ->
+        val cloak = event.entity.query<Cloak>() ?: return@onEvent
+        if (cloak.active) {
+            val options = event.entity.query<SpiderOptions>()?.cloak ?: return@onEvent
+            app.emit(CloakDamageEvent(entity = event.entity, spider = event.spider, cloak = cloak))
+            cloak.breakCloak(options)
+        }
+        cloak.active = false
+    }
+}

@@ -1,0 +1,18 @@
+name: horror-spider
+version: '4.0-SNAPSHOT'
+main: com.heledron.spideranimation.SpiderAnimationPlugin
+api-version: '1.21'
+
+commands:
+  horror:
+    description: Gère les araignées d'horreur
+    usage: /horror <spawn|remove|clear|list|reload|scale|color|charge>
+    permission: horror-spider.command
+
+permissions:
+  spider-animation.command:
+    description: Allows use of the /spider command
+    default: op
+  horror-spider.command:
+    description: Permet d'utiliser la commande /horror
+    default: op

@@ -1,0 +1,133 @@
+package com.heledron.spideranimation.spider.presets
+
+import com.heledron.spideranimation.spider.configuration.BodyPlan
+import com.heledron.spideranimation.spider.configuration.LegPlan
+import com.heledron.spideranimation.spider.configuration.SegmentPlan
+import com.heledron.spideranimation.spider.configuration.SpiderOptions
+import com.heledron.spideranimation.utilities.DisplayModel
+import com.heledron.spideranimation.utilities.inverse_kinematics.IKChain3D
+import com.heledron.spideranimation.utilities.inverse_kinematics.IKHingeJoint3D
+import com.heledron.spideranimation.utilities.inverse_kinematics.IKJoint3D
+import com.heledron.spideranimation.utilities.inverse_kinematics.IKSwingTwistJoint3D
+import com.heledron.spideranimation.utilities.maths.UP_VECTOR
+import com.heledron.spideranimation.utilities.maths.toRadians
+import org.bukkit.Material
+import org.bukkit.util.Vector
+import org.joml.Quaternionf
+import kotlin.math.PI
+
+private const val ROOT_MAX_SWING = 0.3 * PI
+private const val ROOT_TWIST = 0.075 * PI
+private const val KNEE_LEEWAY = 0.65 * PI
+
+private val PED_HIP_ROTATION = -(20f.toRadians())
+private val BOT_HIP_ROTATION = (40f.toRadians())
+
+private fun hipJoint(): IKJoint3D = IKSwingTwistJoint3D(
+    maxSwing = ROOT_MAX_SWING,
+    minTwist = -ROOT_TWIST,
+    maxTwist = ROOT_TWIST,
+    referenceAxis = UP_VECTOR,
+)
+
+private fun kneeJoint(leeway: Double = KNEE_LEEWAY, inverted: Boolean = false): IKJoint3D = kneeJoint(
+    min = if (inverted) -leeway else 0.0,
+    max = if (inverted) 0.0 else leeway,
+)
+
+private fun kneeJoint(min: Double, max: Double): IKJoint3D = IKHingeJoint3D(
+    minAngle = min,
+    maxAngle = max,
+    axis = Vector(1, 0, 0),
+    reference = IKChain3D.CHAIN_AXIS,
+)
+
+private fun equalLength(segmentCount: Int, length: Double): List<SegmentPlan> {
+    return List(segmentCount) { index ->
+        val joint = if (index == 0) hipJoint() else kneeJoint()
+        SegmentPlan(length, joint, DisplayModel.empty())
+    }
+}
+
+private fun createRobotSegments(segmentCount: Int, lengthScale: Double): List<SegmentPlan> {
+    return List(segmentCount) { index ->
+        when (index) {
+            0 -> SegmentPlan(lengthScale * .5, hipJoint(), DisplayModel.empty())
+            1 -> SegmentPlan(lengthScale * .8, kneeJoint(inverted = true), DisplayModel.empty())
+            else -> SegmentPlan(lengthScale, kneeJoint(), DisplayModel.empty())
+        }
+    }
+}
+
+private fun BodyPlan.addLegPair(root: Vector, rest: Vector, segments: List<SegmentPlan>, hipRotation: Float) {
+	val orientation = Quaternionf().rotateX(hipRotation)
+    legs += LegPlan(Vector( root.x, root.y, root.z), Vector( rest.x, rest.y, rest.z), segments, orientation)
+    legs += LegPlan(Vector(-root.x, root.y, root.z), Vector(-rest.x, rest.y, rest.z), segments.map { it.clone() }, orientation)
+}
+
+fun biped(segmentCount: Int, segmentLength: Double): SpiderOptions {
+    val options = SpiderOptions()
+    options.bodyPlan.addLegPair(Vector(.0, .0, .0), Vector(1.0, .0, .0), equalLength(segmentCount, segmentLength), PED_HIP_ROTATION)
+    applyLineLegModel(options.bodyPlan, Material.NETHERITE_BLOCK.createBlockData())
+    return options
+}
+
+fun quadruped(segmentCount: Int, segmentLength: Double): SpiderOptions {
+    val options = SpiderOptions()
+    options.bodyPlan.addLegPair(Vector(.0, .0, .0), Vector(0.9,.0, 0.9), equalLength(segmentCount, 0.9 * segmentLength), PED_HIP_ROTATION)
+    options.bodyPlan.addLegPair(Vector(.0, .0, .0), Vector(1.0, .0, -1.1), equalLength(segmentCount, 1.2 * segmentLength), PED_HIP_ROTATION)
+    applyLineLegModel(options.bodyPlan, Material.NETHERITE_BLOCK.createBlockData())
+    return options
+}
+
+fun hexapod(segmentCount: Int, segmentLength: Double): SpiderOptions {
+    val options = SpiderOptions()
+    options.bodyPlan.addLegPair(Vector(.0,.0,0.1), Vector(1.0,.0, 1.1), equalLength(segmentCount, 1.1 * segmentLength), PED_HIP_ROTATION)
+    options.bodyPlan.addLegPair(Vector(.0,.0,0.0), Vector(1.3,.0,-0.3), equalLength(segmentCount, 1.1 * segmentLength), PED_HIP_ROTATION)
+    options.bodyPlan.addLegPair(Vector(.0,.0,-.1), Vector(1.2,.0,-2.0), equalLength(segmentCount, 1.6 * segmentLength), PED_HIP_ROTATION)
+    applyLineLegModel(options.bodyPlan, Material.NETHERITE_BLOCK.createBlockData())
+    return options
+}
+
+fun octopod(segmentCount: Int, segmentLength: Double): SpiderOptions {
+    val options = SpiderOptions()
+    options.bodyPlan.addLegPair(Vector(.0,.0,  .1), Vector(1.0, .0,  1.6), equalLength(segmentCount, 1.1 * segmentLength), PED_HIP_ROTATION)
+    options.bodyPlan.addLegPair(Vector(.0,.0,  .0), Vector(1.3, .0,  0.4), equalLength(segmentCount, 1.0 * segmentLength), PED_HIP_ROTATION)
+    options.bodyPlan.addLegPair(Vector(.0,.0, -.1), Vector(1.3, .0, -0.9), equalLength(segmentCount, 1.1 * segmentLength), PED_HIP_ROTATION)
+    options.bodyPlan.addLegPair(Vector(.0,.0, -.2), Vector(1.1, .0, -2.5), equalLength(segmentCount, 1.6 * segmentLength), PED_HIP_ROTATION)
+    applyLineLegModel(options.bodyPlan, Material.NETHERITE_BLOCK.createBlockData())
+    return options
+}
+
+
+fun quadBot(segmentCount: Int, segmentLength: Double): SpiderOptions {
+    val options = SpiderOptions()
+    options.bodyPlan.bodyModel = SpiderTorsoModels.FLAT.clone()
+    options.bodyPlan.addLegPair(root = Vector(.2,-.2 - .15, .2), rest = Vector(1.3 * 1.0,.0, 1.0), createRobotSegments(segmentCount, .9 * .7 * segmentLength), BOT_HIP_ROTATION)
+    options.bodyPlan.addLegPair(root = Vector(.2,-.2 - .15,-.2), rest = Vector(1.3 * 1.1,.0,-1.2), createRobotSegments(segmentCount, 1.2 * .7 * segmentLength), BOT_HIP_ROTATION)
+    applyBotLegModel(options.bodyPlan)
+    return options
+}
+
+fun hexBot(segmentCount: Int, segmentLength: Double): SpiderOptions {
+    val options = SpiderOptions()
+    options.bodyPlan.bodyModel = SpiderTorsoModels.FLAT.clone()
+    options.bodyPlan.addLegPair(root = Vector(.2,-.2 - .15, .2), rest = Vector(1.3 * 1.0,.0, 1.3), createRobotSegments(segmentCount, 1.1 * .7 * segmentLength), BOT_HIP_ROTATION)
+    options.bodyPlan.addLegPair(root = Vector(.2,-.2 - .15, .0), rest = Vector(1.3 * 1.2,.0,-0.1), createRobotSegments(segmentCount, 1.1 * .7 * segmentLength), BOT_HIP_ROTATION)
+    options.bodyPlan.addLegPair(root = Vector(.2,-.2 - .15,-.2), rest = Vector(1.3 * 1.1,.0,-1.6), createRobotSegments(segmentCount, 1.3 * .7 * segmentLength), BOT_HIP_ROTATION)
+    applyBotLegModel(options.bodyPlan)
+    return options
+}
+
+fun octoBot(segmentCount: Int, segmentLength: Double): SpiderOptions {
+    val options = SpiderOptions()
+    options.bodyPlan.bodyModel = SpiderTorsoModels.FLAT.clone()
+    options.bodyPlan.addLegPair(root = Vector(.2,-.2 - .15, .3), rest = Vector(1.3 * 1.0,.0, 1.3), createRobotSegments(segmentCount, 1.1 * .7 * segmentLength), BOT_HIP_ROTATION)
+    options.bodyPlan.addLegPair(root = Vector(.2,-.2 - .15, .1), rest = Vector(1.3 * 1.2,.0, 0.5), createRobotSegments(segmentCount, 1.0 * .7 * segmentLength), BOT_HIP_ROTATION)
+    options.bodyPlan.addLegPair(root = Vector(.2,-.2 - .15, .1), rest = Vector(1.3 * 1.2,.0,-0.7), createRobotSegments(segmentCount, 1.1 * .7 * segmentLength), BOT_HIP_ROTATION)
+    options.bodyPlan.addLegPair(root = Vector(.2,-.2 - .15,-.3), rest = Vector(1.3 * 1.1,.0,-1.6), createRobotSegments(segmentCount, 1.3 * .7 * segmentLength), BOT_HIP_ROTATION)
+    applyBotLegModel(options.bodyPlan)
+    return options
+}
+
+fun defaultPreset() = hexBot(4, 1.0)
