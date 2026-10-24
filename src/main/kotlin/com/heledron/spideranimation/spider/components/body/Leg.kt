@@ -13,8 +13,11 @@ import com.heledron.spideranimation.utilities.maths.lerp
 import com.heledron.spideranimation.utilities.maths.moveTowards
 import com.heledron.spideranimation.utilities.maths.rotate
 import org.bukkit.util.Vector
+import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.cos
 import kotlin.math.floor
+import kotlin.math.sin
 
 
 class LegStepEvent(val entity: ECSEntity, val spider: SpiderBody, val leg: Leg)
@@ -44,7 +47,7 @@ class Leg(
     var endEffector = target.position.clone()
     var previousEndEffector = endEffector.clone()
 
-    val ik = createSpiderLegIK(legPlan)
+    var ik = createSpiderLegIK(legPlan); private set
 
     var touchingGround = true; private set
     var isMoving = false; private set
@@ -92,9 +95,52 @@ class Leg(
         comfortZone = Capsule(zoneStart, zoneEnd, options.gait.comfortZoneRadius)
     }
 
+    private fun stateIsFinite(): Boolean =
+        endEffector.isFiniteVector() && previousEndEffector.isFiniteVector() &&
+        stepStart.isFiniteVector() && target.position.isFiniteVector() && stepProgress.isFinite()
+
+    /** Remet la patte dans un état sain (NaN / infini) : posée au repos, immobile, chaîne IK recréée. */
+    fun resetState() {
+        val fallback = if (::restPosition.isInitialized && restPosition.isFiniteVector()) restPosition else spider.position
+        endEffector = fallback.clone()
+        previousEndEffector = fallback.clone()
+        stepStart = fallback.clone()
+        stepProgress = 0.0
+        isMoving = false
+        touchingGround = false
+        groundTarget = null
+        target = LegTarget(position = fallback.clone(), isGrounded = false, id = -1)
+        ik = createSpiderLegIK(legPlan)
+    }
+
+    /** Pose immédiatement la patte sur sa cible (après une téléportation sur une autre surface). */
+    fun snapToTarget() {
+        updateMemo()
+        val ground = locateGroundTarget()
+        groundTarget = ground
+        val newTarget = ground ?: strandedTarget()
+        target = newTarget
+        endEffector = newTarget.position.clone()
+        previousEndEffector = endEffector.clone()
+        stepStart = endEffector.clone()
+        stepProgress = 0.0
+        isMoving = false
+        touchingGround = newTarget.isGrounded
+        ik = createSpiderLegIK(legPlan)
+    }
+
     fun update() {
+        if (!spider.position.isFiniteVector()) return
+        if (!stateIsFinite()) resetState()
+
         updateMovement()
+        if (!stateIsFinite()) resetState()
+
         ik.solve(spider.position, spider.orientation, endEffector)
+        if (!ik.isFinite()) {
+            resetState()
+            ik.solve(spider.position, spider.orientation, endEffector)
+        }
     }
 
     private fun updateMovement() {
@@ -159,7 +205,17 @@ class Leg(
 
     private fun applyBodyMotion(point: Vector) {
         point.add(spider.velocity)
-        point.rotateAroundY(spider.rotationalVelocity.y.toDouble(), spider.position)
+        spinAroundUp(point)
+    }
+
+    /** Fait tourner [point] autour de la normale de la surface (la verticale quand elle est au sol), comme le corps. */
+    private fun spinAroundUp(point: Vector) {
+        val up = spider.surfaceUp
+        val rotation = spider.rotationalVelocity
+        val spin = (rotation.x * up.x + rotation.y * up.y + rotation.z * up.z).toDouble()
+        if (spin == 0.0 || !spin.isFinite()) return
+        val axis = up.clone().safeNormalize(Vector(0.0, 1.0, 0.0))
+        point.subtract(spider.position).rotateAroundNonUnitAxis(axis, spin).add(spider.position)
     }
 
     private fun beginMove() {
@@ -187,14 +243,19 @@ class Leg(
             stepStart.y.lerp(target.position.y, t),
             stepStart.z.lerp(target.position.z, t),
         )
-        position.y += options.gait.legLiftHeight * stepLiftFactor(t)
+        // la patte se lève le long de la normale de la surface (vers le haut au sol, vers l'extérieur sur un mur / plafond)
+        val up = UP_VECTOR.rotate(options.gait.scanOrientation.get(spider))
+        position.add(up.multiply(options.gait.legLiftHeight * stepLiftFactor(t)))
         return position
     }
 
     private fun updateMove(): Boolean {
 		val gait = options.gait
     	
-        val distance = stepStart.horizontalDistance(target.position).coerceAtLeast(1e-4)
+        val stepUp = UP_VECTOR.rotate(gait.scanOrientation.get(spider))
+        val stepDelta = target.position.clone().subtract(stepStart)
+        stepDelta.subtract(stepUp.clone().multiply(stepDelta.dot(stepUp)))
+        val distance = stepDelta.length().coerceAtLeast(1e-4)
         stepProgress = stepProgress.moveTowards(1.0, gait.legMoveSpeed / distance)
 
         endEffector.copy(sampleStepPosition(stepProgress))
@@ -222,11 +283,15 @@ class Leg(
         val direction = if (spider.velocity.isZero) spider.forwardDirection() else spider.velocity.clone().normalize()
 
         val lookAhead = direction.multiply(triggerZoneRadius * options.gait.legLookAheadFraction).add(restPosition)
-        lookAhead.rotateAroundY(spider.rotationalVelocity.y.toDouble(), spider.position)
+        spinAroundUp(lookAhead)
         return lookAhead
     }
 
     fun locateGroundTarget(): LegTarget? {
+        // mur, plafond ou sol très incliné : balayage dans le plan de la surface
+        val surfaceUp = UP_VECTOR.rotate(options.gait.scanOrientation.get(spider))
+        if (surfaceUp.y < 0.999) return locateGroundTargetOnSurface(surfaceUp)
+
         val lookAhead = lookAheadPosition.toLocation(spider.world)
         val scanStartPosition = scanLine.point1
         val scanVector = scanLine.vector()
@@ -287,6 +352,60 @@ class Leg(
             return null
         }
 
+        return best
+    }
+
+    /** Version de [locateGroundTarget] valable pour n'importe quelle orientation de surface (murs, plafonds). */
+    private fun locateGroundTargetOnSurface(up: Vector): LegTarget? {
+        val world = spider.world
+        val scanStart = scanLine.point1
+        val scanVector = scanLine.vector()
+        val scanLength = scanVector.length()
+        if (scanLength < 1e-6 || !scanLength.isFinite()) return null
+
+        // deux axes tangents à la surface
+        val reference = if (abs(up.y) < 0.9) Vector(0.0, 1.0, 0.0) else Vector(1.0, 0.0, 0.0)
+        val sideA = up.clone().crossProduct(reference).safeNormalize(Vector(1.0, 0.0, 0.0))
+        val sideB = up.clone().crossProduct(sideA).safeNormalize(Vector(0.0, 0.0, 1.0))
+
+        var id = 0
+        fun cast(offsetA: Double, offsetB: Double): LegTarget? {
+            id += 1
+            val start = scanStart.clone()
+                .add(sideA.clone().multiply(offsetA))
+                .add(sideB.clone().multiply(offsetB))
+            val hit = world.raycastGround(start, scanVector, scanLength) ?: return null
+            // le départ du rayon est dans un bloc : la "surface" trouvée n'en est pas une
+            if (hit.hitBlockFace == null || hit.hitPosition.distanceSquared(start) < 1e-4) return null
+            return LegTarget(position = hit.hitPosition, isGrounded = true, id = id)
+        }
+
+        val lookAhead = lookAheadPosition
+        val main = cast(0.0, 0.0)
+        if (!options.gait.legScanAlternativeGround) return main
+
+        if (main != null) {
+            val height = main.position.clone().subtract(lookAhead).dot(up)
+            if (height >= -0.24 && height <= 1.5) return main
+        }
+
+        val radius = maxOf(0.35, options.bodyPlan.scale * 0.5)
+        val candidates = ArrayList<LegTarget?>()
+        candidates.add(main)
+        for (i in 0 until 8) {
+            val angle = i * Math.PI / 4
+            candidates.add(cast(cos(angle) * radius, sin(angle) * radius))
+        }
+
+        val preferred = lookAhead.clone()
+        val frontBlock = lookAhead.clone().add(spider.forwardDirection()).toLocation(world).block
+        if (!frontBlock.isPassable) preferred.add(up.clone().multiply(options.gait.legScanHeightBias))
+
+        val best = candidates
+            .filterNotNull()
+            .minByOrNull { it.position.distanceSquared(preferred) }
+
+        if (best != null && !comfortZone.contains(best.position)) return null
         return best
     }
 

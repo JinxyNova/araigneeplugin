@@ -16,10 +16,10 @@ import org.bukkit.entity.Player
 import org.bukkit.util.Vector
 
 object HorrorCommand : CommandExecutor, TabCompleter {
-    private val SUBCOMMANDS = listOf("spawn", "remove", "clear", "list", "reload", "scale", "color", "charge")
+    private val SUBCOMMANDS = listOf("spawn", "remove", "clear", "list", "reload", "scale", "color", "charge", "climb", "mini")
 
     private fun usage(sender: CommandSender) {
-        sender.sendPlainMessage("Usage : /horror <spawn [taille] | remove | clear | list | reload | scale <taille> | color <#rrggbb|auto> | charge>")
+        sender.sendPlainMessage("Usage : /horror <spawn [taille] | remove | clear | list | reload | scale <taille> | color <#rrggbb|auto> | charge | climb | mini>")
     }
 
     override fun onCommand(sender: CommandSender, command: Command, label: String, args: Array<out String>): Boolean {
@@ -30,6 +30,7 @@ object HorrorCommand : CommandExecutor, TabCompleter {
 
         when (args[0].lowercase()) {
             "spawn" -> spawn(sender, args)
+            "mini" -> spawn(sender, arrayOf("spawn", "mini"))
             "remove" -> {
                 val entity = target(sender) ?: return noSpider(sender)
                 entity.remove()
@@ -98,6 +99,14 @@ object HorrorCommand : CommandExecutor, TabCompleter {
                 sender.sendPlainMessage("Charge !")
             }
 
+            "climb" -> {
+                val entity = target(sender) ?: return noSpider(sender)
+                val spider = entity.query<SpiderBody>() ?: return noSpider(sender)
+                val behavior = entity.query<HorrorBehavior>() ?: return noSpider(sender)
+                if (behavior.forceClimb(spider, sender as? Player)) sender.sendPlainMessage("Elle part escalader un mur.")
+                else sender.sendPlainMessage("Aucun mur à portée.")
+            }
+
             else -> usage(sender)
         }
         return true
@@ -123,18 +132,27 @@ object HorrorCommand : CommandExecutor, TabCompleter {
             return
         }
 
-        val scale = args.getOrNull(1)?.toDoubleOrNull()
+        val mini = args.getOrNull(1).equals("mini", ignoreCase = true)
+        val scale = if (mini) null else args.getOrNull(1)?.toDoubleOrNull()
 
         // pose l'araignée là où le joueur regarde ; à défaut, 8 blocs devant lui
         val hit = player.world.raycastGround(player.eyePosition, player.direction, 60.0)
-        val ground: Vector = hit?.hitPosition ?: run {
+        val rough: Vector = hit?.hitPosition ?: run {
             val ahead = player.location.toVector().add(player.direction.setY(0.0).normalize().multiply(8.0))
             val y = player.world.getHighestBlockYAt(ahead.blockX, ahead.blockZ) + 1.0
             Vector(ahead.x, y, ahead.z)
         }
+        // jamais dans un bloc : on cherche le sol libre le plus proche du point visé
+        val spawnScale = if (mini) Horror.config.miniScale else (scale ?: Horror.config.scaleStart)
+        val ground: Vector = HorrorPlacement.findGround(player.world, rough.x, rough.z, rough.y.toInt(), spawnScale)
+            ?: HorrorPlacement.findGround(player.world, player.location.x, player.location.z, player.location.blockY, spawnScale)
+            ?: rough
 
-        Horror.spawn(player.world, ground, player.location.toVector(), scale)
-        sender.sendPlainMessage("Araignée d'horreur invoquée. Regarde-la... si tu l'oses.")
+        Horror.spawn(player.world, ground, player.location.toVector(), scale, mini = mini)
+        sender.sendPlainMessage(
+            if (mini) "Mini-araignée invoquée. Elle est toute petite... mais elle est là."
+            else "Araignée d'horreur invoquée. Regarde-la... si tu l'oses."
+        )
     }
 
     private fun list(sender: CommandSender) {
@@ -159,7 +177,8 @@ object HorrorCommand : CommandExecutor, TabCompleter {
             1 -> SUBCOMMANDS.filter { it.startsWith(args[0].lowercase()) }
             2 -> when (args[0].lowercase()) {
                 "color" -> listOf("auto", "#000000", "#8b0000", "#ff1111", "#14081f")
-                "scale", "spawn" -> listOf("0.5", "1", "2", "3")
+                "scale" -> listOf("0.5", "1", "2", "3")
+                "spawn" -> listOf("mini", "0.5", "1", "2", "3")
                 else -> emptyList()
             }
 

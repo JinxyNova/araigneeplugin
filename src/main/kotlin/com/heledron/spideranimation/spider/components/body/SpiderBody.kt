@@ -105,6 +105,97 @@ class SpiderBody(
         }
     }
 
+    // ------------------------------------------------------------------
+    // Surface (marche sur les murs et les plafonds)
+    // ------------------------------------------------------------------
+
+    /** Normale lissée de la surface sur laquelle l'araignée est collée : (0,1,0) = sol, (0,-1,0) = plafond. */
+    val surfaceUp = Vector(0.0, 1.0, 0.0)
+
+    /** Normale visée : surfaceUp tourne progressivement vers elle (renseignée par le capteur de surface). */
+    val targetSurfaceUp = Vector(0.0, 1.0, 0.0)
+
+    /** Vitesse de rotation de surfaceUp vers targetSurfaceUp, en radians par tick. */
+    var surfaceTurnRate = 0.07
+
+    // direction "avant" mémorisée dans le plan de la surface (évite les cas dégénérés quand on regarde le mur)
+    private val surfaceHeading = Vector(0.0, 0.0, 1.0)
+
+    /** Repère (haut = normale de la surface, avant = cap de l'araignée projeté sur la surface). */
+    fun surfaceOrientation(): Quaternionf {
+        val up = surfaceUp
+        val forward = forwardDirection()
+        val flat = forward.subtract(up.clone().multiply(forward.dot(up)))
+        if (flat.isFiniteVector() && flat.lengthSquared() > 0.04) surfaceHeading.copy(flat.normalize())
+        return orientationFrom(up, surfaceHeading)
+    }
+
+    private fun updateSurfaceUp() {
+        val unitUp = Vector(0.0, 1.0, 0.0)
+        if (!targetSurfaceUp.isFiniteVector() || targetSurfaceUp.lengthSquared() < 1e-8) targetSurfaceUp.copy(unitUp)
+        else targetSurfaceUp.normalize()
+        if (!surfaceUp.isFiniteVector() || surfaceUp.lengthSquared() < 1e-8) surfaceUp.copy(targetSurfaceUp)
+
+        // en l'air (saut / chute) on se remet vite à l'endroit
+        val rate = if (airborneTicks > 0) maxOf(surfaceTurnRate, 0.2) else surfaceTurnRate
+
+        val from = surfaceUp.clone().normalize()
+        val angle = acos(from.dot(targetSurfaceUp).coerceIn(-1.0, 1.0))
+        if (angle <= rate) {
+            surfaceUp.copy(targetSurfaceUp)
+            return
+        }
+
+        var axis = from.clone().crossProduct(targetSurfaceUp)
+        if (axis.lengthSquared() < 1e-10) {
+            // vecteurs opposés (demi-tour) : n'importe quel axe perpendiculaire convient
+            axis = Vector(1.0, 0.0, 0.0).crossProduct(from)
+            if (axis.lengthSquared() < 1e-10) axis = Vector(0.0, 0.0, 1.0).crossProduct(from)
+        }
+        axis.normalize()
+        surfaceUp.copy(from.rotateAroundNonUnitAxis(axis, rate)).normalize()
+    }
+
+    /** Gravité ressentie : plaquée contre la surface quand elle est collée, vers le bas du monde quand elle saute ou tombe. */
+    private fun gravityVector(gait: Gait, airborne: Boolean): Vector {
+        if (airborne) return Vector(0.0, -gait.gravityAcceleration, 0.0)
+        return surfaceUp.clone().multiply(-gait.gravityAcceleration)
+    }
+
+    /**
+     * Bond balistique : remplace la vitesse (au lieu de l'ajouter comme [jump]) et décolle de la surface.
+     * Pendant [airTicks] ticks la gravité est celle du monde et les pattes ne portent plus le corps.
+     */
+    fun leap(newVelocity: Vector, airTicks: Int): Boolean {
+        if (!newVelocity.isFiniteVector() || airborneTicks > 0) return false
+        velocity.copy(newVelocity)
+        airborneTicks = airTicks
+        airAge = 0
+        onGround = false
+        targetSurfaceUp.setX(0.0).setY(1.0).setZ(0.0)
+        return true
+    }
+
+    /** Téléporte l'araignée directement sur une surface (sol, mur ou plafond), corps et pattes déjà en place. */
+    fun teleportToSurface(newPosition: Vector, normal: Vector, forward: Vector) {
+        val n = normal.safeNormalize(Vector(0.0, 1.0, 0.0))
+        position.copy(newPosition)
+        surfaceUp.copy(n)
+        targetSurfaceUp.copy(n)
+
+        val heading = forward.clone().subtract(n.clone().multiply(forward.dot(n)))
+        if (heading.isFiniteVector() && heading.lengthSquared() > 1e-6) surfaceHeading.copy(heading.normalize())
+
+        val newOrientation = orientationFrom(n, surfaceHeading)
+        orientation.set(newOrientation)
+        preferredOrientation = Quaternionf(newOrientation)
+
+        velocity.setX(0.0).setY(0.0).setZ(0.0)
+        rotationalVelocity.set(0f, 0f, 0f)
+        airborneTicks = 0
+        for (leg in legs) leg.snapToTarget()
+    }
+
     // utils
     fun location(): Location {
         val location = position.toLocation(world)
@@ -121,6 +212,21 @@ class SpiderBody(
     /** World-space angular velocity (axis × rate, rad/tick). */
     val rotationalVelocity = Vector3f()
 
+    /** Nombre de ticks restants pendant lesquels le sol ne "porte" plus le corps (saut). */
+    var airborneTicks = 0; private set
+    private var airAge = 0
+
+    /** Fait sauter l'araignée : impulsion de vitesse, et le corps n'est plus soutenu par les pattes pendant [airTicks]. */
+    fun jump(impulse: Vector, airTicks: Int = 14): Boolean {
+        if (!impulse.isFiniteVector() || airborneTicks > 0) return false
+        velocity.add(impulse)
+        airborneTicks = airTicks
+        airAge = 0
+        onGround = false
+        targetSurfaceUp.setX(0.0).setY(1.0).setZ(0.0)
+        return true
+    }
+
     fun accelerateRotation(axis: Vector, angle: Float) {
         val a = axis.toVector3f()
         if (a.lengthSquared() < 1e-12f) return
@@ -129,6 +235,12 @@ class SpiderBody(
     }
 
     fun teleport(entity: ECSEntity, newPosition: Vector) {
+        // si elle était sur un mur / plafond, on la repose proprement (à l'endroit) sur le sol
+        if (surfaceUp.dot(UP_VECTOR) < 0.99 || targetSurfaceUp.dot(UP_VECTOR) < 0.99) {
+            teleportToSurface(newPosition, UP_VECTOR, forwardDirection())
+            return
+        }
+
         val diff = newPosition.clone().subtract(position)
 
         position.copy(newPosition)
@@ -187,6 +299,7 @@ class SpiderBody(
     // dernier état fini connu, pour se rattraper en cas de NaN / infini
     private val lastGoodPosition = position.clone()
     private val lastGoodOrientation = Quaternionf(orientation)
+    private val lastGoodSurfaceUp = Vector(0.0, 1.0, 0.0)
 
     private fun stateIsFinite(): Boolean =
         position.isFiniteVector() &&
@@ -202,6 +315,10 @@ class SpiderBody(
         preferredOrientation = Quaternionf(lastGoodOrientation)
         contactAcceleration = Vector(0.0, 0.0, 0.0)
         contact = null
+        airborneTicks = 0
+        surfaceUp.copy(lastGoodSurfaceUp)
+        targetSurfaceUp.copy(lastGoodSurfaceUp)
+        for (leg in legs) leg.resetState()
     }
 
     fun update(ecs: ECS, entity: ECSEntity, options: SpiderOptions) {
@@ -210,6 +327,7 @@ class SpiderBody(
         if (stateIsFinite()) {
             lastGoodPosition.copy(position)
             lastGoodOrientation.set(orientation)
+            if (surfaceUp.isFiniteVector()) lastGoodSurfaceUp.copy(surfaceUp)
         } else {
             restoreLastGoodState()
         }
@@ -223,14 +341,19 @@ class SpiderBody(
             lastAppliedBodyPlan = options.bodyPlan
         }
 
+        updateSurfaceUp()
         updatePreferredAngles(gait)
+
+        val airborne = airborneTicks > 0
+        if (airborne) { airborneTicks--; airAge++ }
+        val gravityVec = gravityVector(gait, airborne)
 
         val upAxis = UP_VECTOR.rotate(preferredOrientation)
 
         val groundedLegs = legs.filter { it.isGrounded() }
         val fractionOfLegsGrounded = if (legs.isEmpty()) 0.0 else groundedLegs.size.toDouble() / legs.size
 
-        val acceleration = Vector(0.0, -gait.gravityAcceleration, 0.0)
+        val acceleration = gravityVec.clone()
 
         // apply rotational velocity
         val angularSpeed = rotationalVelocity.length()
@@ -251,9 +374,9 @@ class SpiderBody(
         // toppling
         val topplingPivot = contact?.centerOfPressure
         val topplingCentre = contact?.centreOfMass
-        if (contact != null && !contact.isStable && topplingPivot != null && topplingCentre != null) {
+        if (!airborne && contact != null && !contact.isStable && topplingPivot != null && topplingCentre != null) {
             val lever = topplingCentre.clone().subtract(topplingPivot)
-            val gravityDir = Vector(0.0, -1.0, 0.0)
+            val gravityDir = gravityVec.safeNormalize(Vector(0.0, -1.0, 0.0))
             val horizontalLever = lever.clone().subtract(gravityDir.clone().multiply(lever.dot(gravityDir)))
             val overhang = horizontalLever.length()
 
@@ -266,7 +389,7 @@ class SpiderBody(
         }
 
         contactAcceleration = Vector(0.0, 0.0, 0.0)
-        if (contact != null) {
+        if (!airborne && contact != null) {
             val preferredPosition = calcPreferredPosition(gait)
 
             val n = contact.supportAxis.safeNormalize(upAxis)
@@ -275,7 +398,7 @@ class SpiderBody(
                 gait.gripAcceleration * fractionOfLegsGrounded
 
             // decompose gravity into normal and tangent
-            val gravity = Vector(0.0, -gait.gravityAcceleration, 0.0)
+            val gravity = gravityVec.clone()
             val gravityIntoSurface = gravity.dot(n)
             val gravityTangent = gravity.clone().subtract(n.clone().multiply(gravityIntoSurface))
 
@@ -310,12 +433,12 @@ class SpiderBody(
         velocity.add(acceleration)
 
         // drag
-        if (!isWalking) {
+        if (!isWalking && !airborne) {
             val legDrag = 1 - gait.groundDragCoefficient * fractionOfLegsGrounded
             velocity.scaleTangential(upAxis, legDrag)
         }
 
-        if (onGround) {
+        if (onGround && !airborne) {
             velocity.scaleTangential(upAxis, .5)
         }
 
@@ -340,6 +463,7 @@ class SpiderBody(
             if (didHit) ecs.emit(SpiderBodyHitGroundEvent(spider = this))
 
             position.copy(collision.position)
+            if (airAge > 3) airborneTicks = 0   // atterri
 
             val n = collision.normal
             val intoSurface = velocity.dot(n)

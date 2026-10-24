@@ -7,6 +7,7 @@ import com.heledron.spideranimation.utilities.ecs.ECS
 import com.heledron.spideranimation.utilities.ecs.ECSComponent
 import com.heledron.spideranimation.utilities.ecs.ECSEntity
 import com.heledron.spideranimation.utilities.getYXZRelative
+import com.heledron.spideranimation.utilities.isFiniteVector
 import com.heledron.spideranimation.utilities.maths.FORWARD_VECTOR
 import com.heledron.spideranimation.utilities.maths.UP_VECTOR
 import com.heledron.spideranimation.utilities.maths.moveTowards
@@ -78,6 +79,9 @@ fun setupLocomotion(app: ECS) {
 
 
 private fun SpiderBody.rotateTowards(targetVector: Vector, gait: Gait) {
+    // rotationTo() avec un vecteur nul / non fini donne un quaternion NaN qui contamine tout le corps
+    if (!targetVector.isFiniteVector() || targetVector.lengthSquared() < 1e-12) return
+
     val facing = Quaternionf().rotationTo(FORWARD_VECTOR.toVector3f(), targetVector.toVector3f())
 
     val relativeEuler = facing.getYXZRelative(preferredOrientation)
@@ -113,6 +117,7 @@ private fun SpiderBody.rotateTowards(targetVector: Vector, gait: Gait) {
 }
 
 private fun SpiderBody.walkAt(targetVelocity: Vector, tridentDetector: TridentHitDetector?, gait: Gait) {
+    if (!targetVelocity.isFiniteVector()) return
     val acceleration = gait.moveAcceleration// * body.legs.filter { it.isGrounded() }.size / body.legs.size
 
     // preserve up motion, steer only within the perpendicular plane

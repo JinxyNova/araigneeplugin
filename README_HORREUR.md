@@ -5,7 +5,7 @@ Tout le code d'origine est conservé ; l'ajout est dans `src/main/kotlin/com/hel
 
 ## Ce qu'elle fait
 **IA qui fait peur** : elle peut devenir grande quand elle veut (souvent quand on la regarde), réapparaît **dans ton dos** si tu ne la vois plus depuis un moment, et fait de petits **sprints** quand tu ne regardes pas (section `ai` de `config.yml`).
-**Une seule araignée à la fois.** Elle apparaît **petite**, **camouflée** (elle prend la couleur du décor derrière elle, seuls les yeux rouges restent visibles), et se révèle quand elle charge. Au contact : **screamer** (cri, écran noir, titre rouge, araignée énorme).
+**Une seule araignée à la fois.** Elle apparaît **petite**, **camouflée** (elle prend la couleur du décor derrière elle, seuls les yeux rouges restent visibles), et reste camouflée même pendant la charge. Quand on la voit, elle peut **reculer en sautant** ou **courir se cacher derrière des blocs** (puis bondir). Au contact : **screamer** en plusieurs temps (silence, caméra forcée sur elle, cris, flash qui clignote, nausée, parfois elle disparaît).
 
 0. **Apparition automatique** fréquente, à 1 à 15 chunks de toi (config `auto-spawn`). Elle peut disparaître en pleine course, une autre revient ensuite.
 1. **Approche** : rapide de très loin, puis lente, avec des ralentissements et des arrêts aléatoires, et des sifflements d'ambiance (elle s'arrête à ~5 blocs et te fixe).
@@ -38,7 +38,8 @@ Vitesses, temps d'attente (1 à 10 s), angle de vision, dégâts (`attack.damage
 tailles min/max, palettes de couleurs en hexadécimal, apparition automatique la nuit (désactivée par défaut).
 
 ## Où est quoi dans le code
-- **Déplacements / états** : `horror/HorrorBehavior.kt` (STALK -> FREEZE -> CHARGE). Il pilote `Locomotion` du dépôt (`walk` / `face`) et bascule `options.gallop`.
+- **Déplacements / états** : `horror/HorrorBehavior.kt` (STALK -> FREEZE -> CHARGE, plus RETREAT et HIDE). Il pilote `Locomotion` du dépôt (`walk` / `face`) et bascule `options.gallop`.
+- **Angoisse ambiante** : `horror/HorrorDread.kt` (section `dread:`). **Placement sûr / cachettes** : `horror/HorrorPlacement.kt` (jamais dans un bloc).
 - **Couleurs** : `HorrorBehavior.tickColor()` + `spider/components/Cloak.kt` (j'y ai ajouté `tint`, une teinte permanente avec fondu).
 - **Taille** : `HorrorBehavior.tickScale()` (même méthode que la commande `/spider scale` du dépôt).
 - **Corps** : `horror/HorrorSpiderFactory.kt` (8 pattes `octopod`, corps en block displays, 8 yeux).
