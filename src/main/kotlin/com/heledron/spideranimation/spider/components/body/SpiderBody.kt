@@ -9,8 +9,6 @@ import com.heledron.spideranimation.utilities.ecs.ECSComponent
 import com.heledron.spideranimation.utilities.ecs.ECS
 import com.heledron.spideranimation.utilities.ecs.ECSEntity
 import com.heledron.spideranimation.utilities.raycastGround
-import com.heledron.spideranimation.utilities.isFiniteVector
-import com.heledron.spideranimation.utilities.safeNormalize
 import com.heledron.spideranimation.utilities.resolveCollision
 import com.heledron.spideranimation.utilities.maths.DOWN_VECTOR
 import com.heledron.spideranimation.utilities.maths.FORWARD_VECTOR
@@ -57,7 +55,7 @@ class SpiderBody(
             return gait.moving.clone()
         }
 
-        val speedFraction = if (gait.maxSpeed > 1e-9) (velocity.length() / gait.maxSpeed).coerceIn(0.0, 1.0) else 0.0
+        val speedFraction = velocity.length() / gait.maxSpeed
         return gait.stationary.clone().lerp(gait.moving, speedFraction)
     }
 
@@ -105,97 +103,6 @@ class SpiderBody(
         }
     }
 
-    // ------------------------------------------------------------------
-    // Surface (marche sur les murs et les plafonds)
-    // ------------------------------------------------------------------
-
-    /** Normale lissée de la surface sur laquelle l'araignée est collée : (0,1,0) = sol, (0,-1,0) = plafond. */
-    val surfaceUp = Vector(0.0, 1.0, 0.0)
-
-    /** Normale visée : surfaceUp tourne progressivement vers elle (renseignée par le capteur de surface). */
-    val targetSurfaceUp = Vector(0.0, 1.0, 0.0)
-
-    /** Vitesse de rotation de surfaceUp vers targetSurfaceUp, en radians par tick. */
-    var surfaceTurnRate = 0.07
-
-    // direction "avant" mémorisée dans le plan de la surface (évite les cas dégénérés quand on regarde le mur)
-    private val surfaceHeading = Vector(0.0, 0.0, 1.0)
-
-    /** Repère (haut = normale de la surface, avant = cap de l'araignée projeté sur la surface). */
-    fun surfaceOrientation(): Quaternionf {
-        val up = surfaceUp
-        val forward = forwardDirection()
-        val flat = forward.subtract(up.clone().multiply(forward.dot(up)))
-        if (flat.isFiniteVector() && flat.lengthSquared() > 0.04) surfaceHeading.copy(flat.normalize())
-        return orientationFrom(up, surfaceHeading)
-    }
-
-    private fun updateSurfaceUp() {
-        val unitUp = Vector(0.0, 1.0, 0.0)
-        if (!targetSurfaceUp.isFiniteVector() || targetSurfaceUp.lengthSquared() < 1e-8) targetSurfaceUp.copy(unitUp)
-        else targetSurfaceUp.normalize()
-        if (!surfaceUp.isFiniteVector() || surfaceUp.lengthSquared() < 1e-8) surfaceUp.copy(targetSurfaceUp)
-
-        // en l'air (saut / chute) on se remet vite à l'endroit
-        val rate = if (airborneTicks > 0) maxOf(surfaceTurnRate, 0.2) else surfaceTurnRate
-
-        val from = surfaceUp.clone().normalize()
-        val angle = acos(from.dot(targetSurfaceUp).coerceIn(-1.0, 1.0))
-        if (angle <= rate) {
-            surfaceUp.copy(targetSurfaceUp)
-            return
-        }
-
-        var axis = from.clone().crossProduct(targetSurfaceUp)
-        if (axis.lengthSquared() < 1e-10) {
-            // vecteurs opposés (demi-tour) : n'importe quel axe perpendiculaire convient
-            axis = Vector(1.0, 0.0, 0.0).crossProduct(from)
-            if (axis.lengthSquared() < 1e-10) axis = Vector(0.0, 0.0, 1.0).crossProduct(from)
-        }
-        axis.normalize()
-        surfaceUp.copy(from.rotateAroundNonUnitAxis(axis, rate)).normalize()
-    }
-
-    /** Gravité ressentie : plaquée contre la surface quand elle est collée, vers le bas du monde quand elle saute ou tombe. */
-    private fun gravityVector(gait: Gait, airborne: Boolean): Vector {
-        if (airborne) return Vector(0.0, -gait.gravityAcceleration, 0.0)
-        return surfaceUp.clone().multiply(-gait.gravityAcceleration)
-    }
-
-    /**
-     * Bond balistique : remplace la vitesse (au lieu de l'ajouter comme [jump]) et décolle de la surface.
-     * Pendant [airTicks] ticks la gravité est celle du monde et les pattes ne portent plus le corps.
-     */
-    fun leap(newVelocity: Vector, airTicks: Int): Boolean {
-        if (!newVelocity.isFiniteVector() || airborneTicks > 0) return false
-        velocity.copy(newVelocity)
-        airborneTicks = airTicks
-        airAge = 0
-        onGround = false
-        targetSurfaceUp.setX(0.0).setY(1.0).setZ(0.0)
-        return true
-    }
-
-    /** Téléporte l'araignée directement sur une surface (sol, mur ou plafond), corps et pattes déjà en place. */
-    fun teleportToSurface(newPosition: Vector, normal: Vector, forward: Vector) {
-        val n = normal.safeNormalize(Vector(0.0, 1.0, 0.0))
-        position.copy(newPosition)
-        surfaceUp.copy(n)
-        targetSurfaceUp.copy(n)
-
-        val heading = forward.clone().subtract(n.clone().multiply(forward.dot(n)))
-        if (heading.isFiniteVector() && heading.lengthSquared() > 1e-6) surfaceHeading.copy(heading.normalize())
-
-        val newOrientation = orientationFrom(n, surfaceHeading)
-        orientation.set(newOrientation)
-        preferredOrientation = Quaternionf(newOrientation)
-
-        velocity.setX(0.0).setY(0.0).setZ(0.0)
-        rotationalVelocity.set(0f, 0f, 0f)
-        airborneTicks = 0
-        for (leg in legs) leg.snapToTarget()
-    }
-
     // utils
     fun location(): Location {
         val location = position.toLocation(world)
@@ -212,21 +119,6 @@ class SpiderBody(
     /** World-space angular velocity (axis × rate, rad/tick). */
     val rotationalVelocity = Vector3f()
 
-    /** Nombre de ticks restants pendant lesquels le sol ne "porte" plus le corps (saut). */
-    var airborneTicks = 0; private set
-    private var airAge = 0
-
-    /** Fait sauter l'araignée : impulsion de vitesse, et le corps n'est plus soutenu par les pattes pendant [airTicks]. */
-    fun jump(impulse: Vector, airTicks: Int = 14): Boolean {
-        if (!impulse.isFiniteVector() || airborneTicks > 0) return false
-        velocity.add(impulse)
-        airborneTicks = airTicks
-        airAge = 0
-        onGround = false
-        targetSurfaceUp.setX(0.0).setY(1.0).setZ(0.0)
-        return true
-    }
-
     fun accelerateRotation(axis: Vector, angle: Float) {
         val a = axis.toVector3f()
         if (a.lengthSquared() < 1e-12f) return
@@ -235,12 +127,6 @@ class SpiderBody(
     }
 
     fun teleport(entity: ECSEntity, newPosition: Vector) {
-        // si elle était sur un mur / plafond, on la repose proprement (à l'endroit) sur le sol
-        if (surfaceUp.dot(UP_VECTOR) < 0.99 || targetSurfaceUp.dot(UP_VECTOR) < 0.99) {
-            teleportToSurface(newPosition, UP_VECTOR, forwardDirection())
-            return
-        }
-
         val diff = newPosition.clone().subtract(position)
 
         position.copy(newPosition)
@@ -296,44 +182,7 @@ class SpiderBody(
         preferredOrientation = Quaternionf(heading).rotateX(preferredPitch).rotateZ(preferredRoll)
     }
 
-    // dernier état fini connu, pour se rattraper en cas de NaN / infini
-    private val lastGoodPosition = position.clone()
-    private val lastGoodOrientation = Quaternionf(orientation)
-    private val lastGoodSurfaceUp = Vector(0.0, 1.0, 0.0)
-
-    private fun stateIsFinite(): Boolean =
-        position.isFiniteVector() &&
-        velocity.isFiniteVector() &&
-        rotationalVelocity.isFinite() &&
-        orientation.x.isFinite() && orientation.y.isFinite() && orientation.z.isFinite() && orientation.w.isFinite()
-
-    private fun restoreLastGoodState() {
-        position.copy(lastGoodPosition)
-        velocity.setX(0.0).setY(0.0).setZ(0.0)
-        rotationalVelocity.set(0f, 0f, 0f)
-        orientation.set(lastGoodOrientation)
-        preferredOrientation = Quaternionf(lastGoodOrientation)
-        contactAcceleration = Vector(0.0, 0.0, 0.0)
-        contact = null
-        airborneTicks = 0
-        surfaceUp.copy(lastGoodSurfaceUp)
-        targetSurfaceUp.copy(lastGoodSurfaceUp)
-        for (leg in legs) leg.resetState()
-    }
-
     fun update(ecs: ECS, entity: ECSEntity, options: SpiderOptions) {
-        if (!stateIsFinite()) restoreLastGoodState()
-        updateInternal(ecs, entity, options)
-        if (stateIsFinite()) {
-            lastGoodPosition.copy(position)
-            lastGoodOrientation.set(orientation)
-            if (surfaceUp.isFiniteVector()) lastGoodSurfaceUp.copy(surfaceUp)
-        } else {
-            restoreLastGoodState()
-        }
-    }
-
-    private fun updateInternal(ecs: ECS, entity: ECSEntity, options: SpiderOptions) {
         val gait = options.gait
 
         if (lastAppliedBodyPlan !== options.bodyPlan) {
@@ -341,19 +190,14 @@ class SpiderBody(
             lastAppliedBodyPlan = options.bodyPlan
         }
 
-        updateSurfaceUp()
         updatePreferredAngles(gait)
-
-        val airborne = airborneTicks > 0
-        if (airborne) { airborneTicks--; airAge++ }
-        val gravityVec = gravityVector(gait, airborne)
 
         val upAxis = UP_VECTOR.rotate(preferredOrientation)
 
         val groundedLegs = legs.filter { it.isGrounded() }
-        val fractionOfLegsGrounded = if (legs.isEmpty()) 0.0 else groundedLegs.size.toDouble() / legs.size
+        val fractionOfLegsGrounded = groundedLegs.size.toDouble() / legs.size
 
-        val acceleration = gravityVec.clone()
+        val acceleration = Vector(0.0, -gait.gravityAcceleration, 0.0)
 
         // apply rotational velocity
         val angularSpeed = rotationalVelocity.length()
@@ -374,31 +218,31 @@ class SpiderBody(
         // toppling
         val topplingPivot = contact?.centerOfPressure
         val topplingCentre = contact?.centreOfMass
-        if (!airborne && contact != null && !contact.isStable && topplingPivot != null && topplingCentre != null) {
+        if (contact != null && !contact.isStable && topplingPivot != null && topplingCentre != null) {
             val lever = topplingCentre.clone().subtract(topplingPivot)
-            val gravityDir = gravityVec.safeNormalize(Vector(0.0, -1.0, 0.0))
+            val gravityDir = Vector(0.0, -1.0, 0.0)
             val horizontalLever = lever.clone().subtract(gravityDir.clone().multiply(lever.dot(gravityDir)))
             val overhang = horizontalLever.length()
 
             if (overhang > 1e-6) {
                 // axis = horizontal lever × down: rotating about it drops the centre of mass
-                val axis = horizontalLever.crossProduct(gravityDir).safeNormalize()
+                val axis = horizontalLever.crossProduct(gravityDir).normalize()
                 val angularAcceleration = gait.topplingAcceleration * overhang
                 rotationalVelocity.add(axis.toVector3f().mul(angularAcceleration.toFloat()))
             }
         }
 
         contactAcceleration = Vector(0.0, 0.0, 0.0)
-        if (!airborne && contact != null) {
+        if (contact != null) {
             val preferredPosition = calcPreferredPosition(gait)
 
-            val n = contact.supportAxis.safeNormalize(upAxis)
+            val n = contact.supportAxis.clone().normalize()
             val gripLimit = 
                 if (!gait.grip) 0.0 else 
                 gait.gripAcceleration * fractionOfLegsGrounded
 
             // decompose gravity into normal and tangent
-            val gravity = gravityVec.clone()
+            val gravity = Vector(0.0, -gait.gravityAcceleration, 0.0)
             val gravityIntoSurface = gravity.dot(n)
             val gravityTangent = gravity.clone().subtract(n.clone().multiply(gravityIntoSurface))
 
@@ -422,7 +266,7 @@ class SpiderBody(
             // cancel tangential gravity
             val traction = gravityTangent.multiply(-1.0)
             if (traction.lengthSquared() > gripLimit * gripLimit) {
-                traction.safeNormalize(Vector(0.0, 0.0, 0.0)).multiply(gripLimit)
+                traction.normalize().multiply(gripLimit)
             }
 
             contactAcceleration = n.clone().multiply(support + adhesion).add(traction)
@@ -433,12 +277,12 @@ class SpiderBody(
         velocity.add(acceleration)
 
         // drag
-        if (!isWalking && !airborne) {
+        if (!isWalking) {
             val legDrag = 1 - gait.groundDragCoefficient * fractionOfLegsGrounded
             velocity.scaleTangential(upAxis, legDrag)
         }
 
-        if (onGround && !airborne) {
+        if (onGround) {
             velocity.scaleTangential(upAxis, .5)
         }
 
@@ -463,7 +307,6 @@ class SpiderBody(
             if (didHit) ecs.emit(SpiderBodyHitGroundEvent(spider = this))
 
             position.copy(collision.position)
-            if (airAge > 3) airborneTicks = 0   // atterri
 
             val n = collision.normal
             val intoSurface = velocity.dot(n)
@@ -491,9 +334,9 @@ class SpiderBody(
         val bodyHeight = posture(gait).bodyHeight
 
         // feet position
-        val feetSupport = if (legs.isEmpty()) null else legs
-        	.filter { it.target.isGrounded }
-        	.map { it.target.position }.average()
+        // [HORREUR] correction : average() d'une liste vide donne NaN (0 * infini) et fait planter le serveur
+        val groundedTargets = legs.filter { it.target.isGrounded }.map { it.target.position }
+        val feetSupport = if (groundedTargets.isEmpty()) null else groundedTargets.average()
 
         // ground position
         val lookAhead = position.clone().add(velocity)
@@ -515,14 +358,11 @@ class SpiderBody(
     private fun calcContact(gait: Gait): ContactInfo? {
         val up = UP_VECTOR.rotate(gait.scanOrientation.get(this)).normalize()
 
-        if (legs.isEmpty()) return null
         val centreOfMass = legs.map { it.endEffector }.average()
         centreOfMass.lerp(position, 0.5)
         centreOfMass.add(up.clone().multiply(0.01))
 
-        if (!centreOfMass.isFiniteVector()) return null
-
-        val groundedLegs = legsInPolygonalOrder().map { legs[it] }.filter { it.isGrounded() && it.endEffector.isFiniteVector() }
+        val groundedLegs = legsInPolygonalOrder().map { legs[it] }.filter { it.isGrounded() }
         if (groundedLegs.isEmpty()) return null
 
         val legsPolygon = groundedLegs.map { it.endEffector.clone() }
@@ -530,7 +370,7 @@ class SpiderBody(
         if (legsPolygon.size == 1) {
             val centerOfPressure = groundedLegs.first().endEffector.clone()
             return ContactInfo(
-                supportAxis = centreOfMass.clone().subtract(centerOfPressure).safeNormalize(up),
+                supportAxis = safeNormalize(centreOfMass.clone().subtract(centerOfPressure), up),
                 centerOfPressure = centerOfPressure,
                 centreOfMass = centreOfMass,
                 contactPolygon = legsPolygon,
@@ -567,7 +407,7 @@ class SpiderBody(
         val nearest = nearestPointInPolygon(centre2D, polygon2D)
         val centerOfPressure = unProject(nearest)
         return ContactInfo(
-            supportAxis = centreOfMass.clone().subtract(centerOfPressure).safeNormalize(up),
+            supportAxis = safeNormalize(centreOfMass.clone().subtract(centerOfPressure), up),
             centerOfPressure = centerOfPressure,
             centreOfMass = centreOfMass,
             contactPolygon = legsPolygon,
@@ -588,7 +428,23 @@ class ContactInfo(
 fun setupSpiderBody(app: ECS) {
     app.onTick {
         for ((entity, spider, options) in app.query<ECSEntity, SpiderBody, SpiderOptions>()) {
-            spider.update(app, entity, options)
+            // [HORREUR] garde-fou : une araignée corrompue (NaN) est supprimée au lieu de bloquer tout le plugin
+            val p = spider.position
+            if (!p.x.isFinite() || !p.y.isFinite() || !p.z.isFinite()) {
+                org.bukkit.Bukkit.getLogger().warning("[horror-spider] Araignée supprimée : position invalide.")
+                entity.remove()
+                continue
+            }
+            try {
+                spider.update(app, entity, options)
+            } catch (e: IllegalArgumentException) {
+                org.bukkit.Bukkit.getLogger().warning("[horror-spider] Araignée supprimée : ${e.message}")
+                entity.remove()
+            }
         }
     }
 }
+
+/** [HORREUR] normalize() d'un vecteur nul donne NaN ; on retombe sur [fallback]. */
+private fun safeNormalize(v: Vector, fallback: Vector): Vector =
+    if (v.lengthSquared() < 1e-12) fallback.clone() else v.normalize()

@@ -38,6 +38,7 @@ class Cloak : ECSComponent {
      * Le changement de couleur se fait en fondu (voir CloakOptions.lerpSpeed).
      */
     var tint: Oklab? = null
+    private val matchCache = java.util.WeakHashMap<Any, Triple<Int, BlockData, Int>>()
 
     /** [HORREUR] Variation de luminosité stable par pièce (évite un aplat uniforme). */
     var tintVariation = 0f
@@ -67,8 +68,26 @@ class Cloak : ECSComponent {
         if (override != null) return override to Display.Brightness(0, 15)
 
         val cloakColor = cloakColor[id] ?: return originalBlock to originalBrightness
-        val match = findBlockWithColor(cloakColor.toRGB(), options.allowCustomBrightness)
+
+        // [HORREUR] cache : la recherche du bloc le plus proche parcourt ~8000 couleurs, trop cher à faire
+        // à chaque tick pour chaque pièce quand le camouflage est permanent
+        val rgb = cloakColor.toRGB()
+        val key = rgb.asRGB()
+        val cached = matchCache[id]
+        if (cached != null && cached.first == key) return cached.second to Display.Brightness(0, cached.third)
+
+        val match = findBlockWithColor(rgb, options.allowCustomBrightness)
+        matchCache[id] = Triple(key, match.block, match.brightness)
         return match.block to Display.Brightness(0, match.brightness)
+    }
+
+    /** [HORREUR] Luminosité du décor : sombre la nuit et sous terre, pour que le camouflage ne brille pas. */
+    private fun surroundingLight(hit: org.bukkit.block.Block, face: org.bukkit.block.BlockFace?, world: World): Int {
+        val lit = if (face != null) hit.getRelative(face) else hit
+        val sky = lit.lightFromSky.toInt()
+        val night = world.time in 13000L..23000L
+        val skyEffective = if (night) minOf(sky, 4) else sky
+        return maxOf(lit.lightFromBlocks.toInt(), skyEffective).coerceIn(2, 15)
     }
 
     private fun applyCloak(id: Any, world: World, position: Vector, originalBlock: BlockData, originalBrightness: Int, options: CloakOptions) {
@@ -79,9 +98,11 @@ class Cloak : ECSComponent {
         }
 
         fun cast(): RayTraceResult? {
-            val targetPlayer = Bukkit.getOnlinePlayers().firstOrNull() ?: return groundCast()
+            // [HORREUR] le camouflage se règle sur le joueur le plus proche (pas le premier connecté)
+            val targetPlayer = world.players.minByOrNull { it.eyePosition.distanceSquared(position) } ?: return groundCast()
 
             val direction = position.clone().subtract(targetPlayer.eyePosition)
+            if (direction.lengthSquared() < 1e-9) return groundCast()   // [HORREUR] évite une direction nulle
             return world.raycastGround(position, direction, 30.0)
         }
 
@@ -92,9 +113,9 @@ class Cloak : ECSComponent {
             if (!active) return@getTargetColor tintFor(id) ?: originalColor
 
             val rayTrace = cast() ?: return@getTargetColor currentColor
-            val block = rayTrace.hitBlock?.blockData ?: return@getTargetColor currentColor
-            val lightLevel = 15
-            getBlockColor(block, lightLevel)?.toOklab() ?: currentColor
+            val hit = rayTrace.hitBlock ?: return@getTargetColor currentColor
+            val lightLevel = surroundingLight(hit, rayTrace.hitBlockFace, world)
+            getBlockColor(hit.blockData, lightLevel)?.toOklab() ?: currentColor
         }
 
 

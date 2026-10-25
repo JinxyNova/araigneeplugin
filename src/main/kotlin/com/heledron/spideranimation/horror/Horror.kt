@@ -15,7 +15,10 @@ import com.heledron.spideranimation.utilities.ecs.ECSEntity
 import com.heledron.spideranimation.utilities.events.interval
 import com.heledron.spideranimation.utilities.maths.UP_VECTOR
 import org.bukkit.Bukkit
+import org.bukkit.configuration.file.YamlConfiguration
+import java.io.File
 import org.bukkit.GameMode
+import org.bukkit.HeightMap
 import org.bukkit.World
 import org.bukkit.util.Vector
 import org.joml.Quaternionf
@@ -23,6 +26,9 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
+
+/** À incrémenter quand les réglages par défaut changent. */
+private const val CONFIG_VERSION = 4
 
 object Horror {
     lateinit var plugin: SpiderAnimationPlugin
@@ -33,12 +39,18 @@ object Horror {
         plugin.reloadConfig()
         config = HorrorConfig(plugin.config)
 
-        for ((options, behavior) in AppState.ecs.query<SpiderOptions, HorrorBehavior>()) {
-            HorrorSpiderFactory.configureGaits(options, config, options.bodyPlan.scale, if (behavior.mini) config.miniSpeedBoost else 1.0)
-            val fade = if (config.camouflageEnabled) config.camouflageFadeSpeed else config.colorFadeSpeed
-            options.cloak.lerpSpeed = fade
-            options.cloak.lerpRandomness = fade * 1.2
+        for ((_, _, options) in AppState.ecs.query<ECSEntity, SpiderBody, SpiderOptions>()) {
+            HorrorSpiderFactory.configureGaits(options, config, options.bodyPlan.scale)
+            HorrorSpiderFactory.applyFadeSpeed(options, config)
         }
+    }
+
+    /** Vrai si le chunk (bx, bz) et ses 8 voisins sont chargés : sinon les pattes ne trouvent pas le sol. */
+    fun areaLoaded(world: World, bx: Int, bz: Int): Boolean {
+        val cx = bx shr 4
+        val cz = bz shr 4
+        for (dx in -1..1) for (dz in -1..1) if (!world.isChunkLoaded(cx + dx, cz + dz)) return false
+        return true
     }
 
     fun allSpiders(): List<ECSEntity> =
@@ -55,11 +67,11 @@ object Horror {
      * @param ground point au sol où poser les pattes
      * @param facing position vers laquelle elle regarde au départ (le joueur, en général)
      */
-    fun spawn(world: World, ground: Vector, facing: Vector?, scale: Double?, autoSpawned: Boolean = false, mini: Boolean = false): ECSEntity {
+    fun spawn(world: World, ground: Vector, facing: Vector?, scale: Double?, autoSpawned: Boolean = false): ECSEntity {
         val cfg = config
         if (cfg.singleSpider) allSpiders().forEach { it.remove() }   // une seule araignée à la fois
-        val startScale = (if (mini) cfg.miniScale else (scale ?: cfg.scaleStart)).coerceIn(0.15, 8.0)
-        val options = HorrorSpiderFactory.createOptions(cfg, startScale, if (mini) cfg.miniSpeedBoost else 1.0)
+        val startScale = (scale ?: cfg.scaleStart).coerceIn(0.2, 8.0)
+        val options = HorrorSpiderFactory.createOptions(cfg, startScale)
 
         val position = ground.clone().add(UP_VECTOR.multiply(options.walkGait.stationary.bodyHeight))
         val yaw = if (facing == null) Random.nextDouble() * Math.PI * 2
@@ -69,11 +81,7 @@ object Horror {
         val cloak = Cloak()
         cloak.tint = cfg.calmColors.random()
         cloak.tintVariation = cfg.colorVariation
-        if (cfg.camouflageEnabled) {
-            cloak.active = true   // camouflée dès l'apparition
-            options.cloak.lerpSpeed = cfg.camouflageFadeSpeed
-            options.cloak.lerpRandomness = cfg.camouflageFadeSpeed * 1.2
-        }
+        if (cfg.camouflageEnabled) cloak.active = true   // camouflée dès l'apparition
 
         return AppState.ecs.spawn(
             SpiderBody.create(world, position, orientation),
@@ -84,7 +92,7 @@ object Horror {
             SoundsAndParticles(),
             PointDetector(),   // requis par SpiderRenderer
             SpiderRenderer(),
-            HorrorBehavior(autoSpawned, mini),
+            HorrorBehavior(autoSpawned),
         )
     }
 }
@@ -92,6 +100,17 @@ object Horror {
 /** À appeler depuis SpiderAnimationPlugin.onEnable(), après setupSpider(). */
 fun setupHorror(plugin: SpiderAnimationPlugin, app: ECS) {
     Horror.plugin = plugin
+
+    // ancien config.yml (version précédente) : on le garde sous un autre nom et on recrée celui par défaut,
+    // sinon les anciens réglages (taille limitée, plusieurs araignées...) écrasent les nouveaux
+    val configFile = File(plugin.dataFolder, "config.yml")
+    if (configFile.exists() && YamlConfiguration.loadConfiguration(configFile).getInt("config-version", 0) < CONFIG_VERSION) {
+        val backup = File(plugin.dataFolder, "config.old.yml")
+        if (backup.exists()) backup.delete()
+        configFile.renameTo(backup)
+        plugin.logger.warning("Ancien config.yml sauvegardé dans config.old.yml, nouveau config.yml créé.")
+    }
+
     plugin.saveDefaultConfig()
     Horror.config = HorrorConfig(plugin.config)
 
@@ -126,8 +145,7 @@ private fun setupAutoSpawn() {
             it.gameMode != GameMode.SPECTATOR && !it.isDead &&
                     it.world.environment == World.Environment.NORMAL
         }
-        // pas toujours le même joueur : tirage pondéré selon qui a été visé récemment
-        val player = HorrorVictims.pick(players, null, cfg.victimMemorySeconds, null) ?: return@interval
+        val player = players.randomOrNull() ?: return@interval
         val world = player.world
 
         if (cfg.autoSpawnOnlyAtNight && world.time !in 13000L..23000L) return@interval
@@ -142,23 +160,20 @@ private fun setupAutoSpawn() {
         }
         if (nearby >= cfg.autoSpawnMaxSpiders) return@interval
 
-        // 20 % de chances d'avoir la mini-araignée (apparition plus près du joueur)
-        val mini = Random.nextDouble() < cfg.miniChance
-        val maxChunks = if (mini) minOf(cfg.autoSpawnMaxChunks, cfg.miniSpawnMaxChunks) else cfg.autoSpawnMaxChunks
-
         // 1 à 15 chunks (16 à 240 blocs) du joueur, dans un chunk déjà chargé
         for (attempt in 0 until 10) {
             val angle = Random.nextDouble() * Math.PI * 2
-            val chunks = cfg.autoSpawnMinChunks + Random.nextDouble() * (maxChunks - cfg.autoSpawnMinChunks).coerceAtLeast(0.0)
+            val chunks = cfg.autoSpawnMinChunks + Random.nextDouble() * (cfg.autoSpawnMaxChunks - cfg.autoSpawnMinChunks)
             val distance = chunks * 16.0
             val bx = Math.floor(player.location.x + cos(angle) * distance).toInt()
             val bz = Math.floor(player.location.z + sin(angle) * distance).toInt()
-            if (!world.isChunkLoaded(bx shr 4, bz shr 4)) continue
+            if (!Horror.areaLoaded(world, bx, bz)) continue
 
-            val ground = HorrorPlacement.findSurface(world, bx + 0.5, bz + 0.5, if (mini) cfg.miniScale else cfg.scaleStart) ?: continue
+            val y = world.getHighestBlockYAt(bx, bz, HeightMap.MOTION_BLOCKING_NO_LEAVES)   // ignore la cime des arbres
+            val top = world.getBlockAt(bx, y, bz)
+            if (top.isLiquid || !top.type.isSolid) continue
 
-            Horror.spawn(world, ground, player.location.toVector(), null, autoSpawned = true, mini = mini)
-            HorrorVictims.mark(player)
+            Horror.spawn(world, Vector(bx + 0.5, y + 1.0, bz + 0.5), player.location.toVector(), null, autoSpawned = true)
             break
         }
     }

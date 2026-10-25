@@ -6,7 +6,7 @@ api-version: '1.21'
 commands:
   horror:
     description: Gère les araignées d'horreur
-    usage: /horror <spawn|remove|clear|list|reload|scale|color|charge|climb>
+    usage: /horror <spawn|remove|clear|list|reload|scale|color|charge>
     permission: horror-spider.command
 
 permissions:

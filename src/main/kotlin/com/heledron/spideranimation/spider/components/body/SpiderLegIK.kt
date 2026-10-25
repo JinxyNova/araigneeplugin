@@ -10,7 +10,6 @@ import com.heledron.spideranimation.utilities.inverse_kinematics.IKTarget3D
 import com.heledron.spideranimation.utilities.inverse_kinematics.createDampedLeastSquaresIKSolver3D
 import com.heledron.spideranimation.utilities.inverse_kinematics.createIKEvaluator3D
 import com.heledron.spideranimation.utilities.maths.rotate
-import com.heledron.spideranimation.utilities.isFiniteVector
 import org.bukkit.util.Vector
 import org.joml.Quaternionf
 
@@ -32,12 +31,6 @@ class SpiderLegIK(
 
     fun attachmentPosition(spiderPosition: Vector, spiderOrientation: Quaternionf): Vector =
         plan.attachmentPosition.clone().rotate(spiderOrientation).add(spiderPosition)
-
-    /** false si un nœud de la chaîne (position ou rotation) contient un NaN / infini. */
-    fun isFinite(): Boolean = nodes.all { node ->
-        val q = node.worldRotation
-        node.position.isFiniteVector() && q.x.isFinite() && q.y.isFinite() && q.z.isFinite() && q.w.isFinite()
-    }
 
     fun solve(spiderPosition: Vector, spiderOrientation: Quaternionf, endEffector: Vector) {
         pose.position.copy(attachmentPosition(spiderPosition, spiderOrientation))

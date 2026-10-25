@@ -123,8 +123,5 @@ class Gait(
 enum class OrientationMode(val get: (spider: SpiderBody) -> Quaternionf) {
     YAxis({ spider -> spider.orientation.horizontal() }),
     SpiderOrientation({ spider -> spider.orientation }),
-    GroundOrientation({ spider -> spider.preferredOrientation }),
-
-    /** Repère de la surface sur laquelle l'araignée est collée (sol, mur ou plafond) : voir SpiderBody.surfaceUp. */
-    Surface({ spider -> spider.surfaceOrientation() })
+    GroundOrientation({ spider -> spider.preferredOrientation })
 }

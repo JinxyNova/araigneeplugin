@@ -1,6 +1,5 @@
 package com.heledron.spideranimation.horror
 
-import com.heledron.spideranimation.spider.configuration.OrientationMode
 import com.heledron.spideranimation.spider.configuration.SpiderOptions
 import com.heledron.spideranimation.spider.presets.AnimatedPalettes
 import com.heledron.spideranimation.spider.presets.octopod
@@ -25,7 +24,7 @@ object HorrorSpiderFactory {
     private val FULL = Display.Brightness(15, 15)
 
     /** Options d'une araignée d'horreur : 8 pattes, corps sombre, yeux rouges. */
-    fun createOptions(cfg: HorrorConfig, scale: Double, speedBoost: Double = 1.0): SpiderOptions {
+    fun createOptions(cfg: HorrorConfig, scale: Double): SpiderOptions {
         // 8 pattes, 3 segments (preset "octopod" du dépôt d'origine)
         val options = octopod(3, 1.0)
 
@@ -34,35 +33,29 @@ object HorrorSpiderFactory {
         options.bodyPlan.blinkingPalette = AnimatedPalettes.RED_BLINKING_LIGHTS.palette
 
         // allures à l'échelle 1 (la mise à l'échelle les ajuste ensuite)
-        configureGaits(options, cfg, 1.0, speedBoost)
+        configureGaits(options, cfg, 1.0)
         options.gallopGait.moveAcceleration = .15 / 4 * 2   // démarrage de la charge plus sec
 
-        // changement de couleur en fondu lent
-        options.cloak.lerpSpeed = cfg.colorFadeSpeed
-        options.cloak.lerpRandomness = cfg.colorFadeSpeed * 1.2
+        applyFadeSpeed(options, cfg)
 
         options.setScale(scale)
-        if (speedBoost > 1.0) {
-            // mini-araignée : sans ça elle accélère beaucoup trop lentement pour sa vitesse max
-            options.walkGait.moveAcceleration *= speedBoost
-            options.gallopGait.moveAcceleration *= speedBoost
-        }
         return options
     }
 
+    /** Vitesse du fondu de couleur : rapide pour le camouflage, lente sinon. */
+    fun applyFadeSpeed(options: SpiderOptions, cfg: HorrorConfig) {
+        val speed = if (cfg.camouflageEnabled) cfg.camouflageFadeSpeed else cfg.colorFadeSpeed
+        options.cloak.lerpSpeed = speed
+        options.cloak.lerpRandomness = speed * 1.2
+    }
+
     /** Vitesses de marche / de charge. [scale] = échelle actuelle de l'araignée. */
-    fun configureGaits(options: SpiderOptions, cfg: HorrorConfig, scale: Double, speedBoost: Double = 1.0) {
-        // repère de surface : sol, murs et plafonds (SpiderBody.surfaceUp)
-        for (gait in listOf(options.walkGait, options.gallopGait)) {
-            gait.scanOrientation = OrientationMode.Surface
-            gait.grip = true
-        }
+    fun configureGaits(options: SpiderOptions, cfg: HorrorConfig, scale: Double) {
+        options.walkGait.maxSpeed = cfg.stalkSpeed * scale
+        options.walkGait.legMoveSpeed = maxOf(cfg.stalkSpeed * 2.5, 0.2) * scale
 
-        options.walkGait.maxSpeed = cfg.stalkSpeed * scale * speedBoost
-        options.walkGait.legMoveSpeed = maxOf(cfg.stalkSpeed * 2.5, 0.2) * scale * speedBoost
-
-        options.gallopGait.maxSpeed = cfg.chargeSpeed * scale * speedBoost
-        options.gallopGait.legMoveSpeed = cfg.chargeSpeed * 1.25 * scale * speedBoost
+        options.gallopGait.maxSpeed = cfg.chargeSpeed * scale
+        options.gallopGait.legMoveSpeed = cfg.chargeSpeed * 1.25 * scale
     }
 
     // -------------------------------------------------------------------------

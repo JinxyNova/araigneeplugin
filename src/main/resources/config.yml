@@ -4,6 +4,8 @@
 #  Les durées sont en secondes, les vitesses en blocs par tick (20 ticks = 1 s).
 # ============================================================================
 
+config-version: 4               # ne pas modifier
+
 behavior:
   follow-range: 260.0           # distance max à laquelle elle suit un joueur (15 chunks = 240 blocs)
   see-range: 64.0               # distance max à laquelle le joueur peut la "voir"
@@ -65,50 +67,20 @@ scale:
 ai:
   grow-when-seen-chance: 0.5    # probabilité qu'elle gonfle quand on la regarde
   ambush:                       # réapparaît dans ton dos quand tu ne la vois plus depuis un moment
-    chance-per-second: 0.08
-    unseen-seconds: 4.0
-    min-distance: 12.0
-    max-distance: 28.0
+    chance-per-second: 0.04
+    unseen-seconds: 6.0
+    min-distance: 20.0
+    max-distance: 35.0
   burst:                        # petits sprints quand tu ne regardes pas
     chance: 0.2
     speed: 0.28
-  predictive-charge: true       # pendant la charge, elle vise où tu vas (et plus où tu es)
-  skitter-chance-per-second: 0.5  # figée, elle fait de brusques écarts latéraux en te fixant
 
 # Camouflage : les pièces du corps prennent la couleur du décor derrière elle (vu depuis le joueur).
-# Le camouflage reste actif dans tous les états (y compris la charge). Les yeux restent rouges.
+# Elle se révèle (avec un effet "glitch") quand elle se met à charger. Les yeux restent rouges.
 camouflage:
   enabled: true
   fade-speed: 0.15              # vitesse du fondu avec le décor
-
-# Angoisse : effets ambiants qui montent avec la proximité de l'araignée
-dread:
-  enabled: true
-  heartbeat:                    # battements de cœur de plus en plus rapides et forts
-    enabled: true
-    distance: 35.0
-  fake-noises:                  # bruits dans ton dos (porte, pas, souffle...) quand tu ne la vois pas
-    enabled: true
-    distance: 60.0
-    interval-seconds:
-      min: 4.0
-      max: 12.0
-  darkness-pulses:              # l'écran s'assombrit par à-coups quand elle est proche
-    enabled: true
-    distance: 22.0
-    interval-seconds:
-      min: 3.0
-      max: 8.0
-  whispers:                     # messages brouillés dans la barre d'action
-    enabled: true
-    interval-seconds:
-      min: 15.0
-      max: 40.0
-  silence-on-freeze: true       # quand elle se fige, tous les sons s'arrêtent d'un coup
-  fear-on-freeze: true          # tu es pétrifié (lenteur + noir) quand elle se fige
-  charge-effects: true          # cri strident + nausée + noir au début de la charge
-  aftermath: true               # sonné, dans le noir après l'attaque
-  particles: true               # cendres et âmes autour d'elle, poussière rouge en charge
+  reveal-on-charge: true
 
 # Screamer au moment où elle t'atteint : cri, écran noir, titre rouge, araignée énorme
 screamer:
@@ -116,90 +88,6 @@ screamer:
   grow-to-max: true
   blindness-seconds: 1.5
   darkness-seconds: 4.0
-  silence-first: true           # tous les sons coupés une fraction de seconde avant le cri
-  force-look: true              # la caméra se tourne de force vers elle
-  freeze-seconds: 1.5           # le joueur est paralysé pendant le screamer (0 = non)
-  flicker: true                 # titre qui clignote blanc/rouge/noir avec du texte brouillé
-  vanish-chance: 0.4            # probabilité qu'elle disparaisse dans le noir juste après
-  vanish-delay-seconds: 3.0
-
-# Fuite : quand on la voit, elle peut reculer (en sautant) ou courir se cacher derrière des blocs,
-# attendre, puis ressortir ou bondir si tu passes près.
-evade:
-  enabled: true
-  hide-chance: 0.25             # probabilité d'aller se cacher quand on la voit
-  retreat-chance: 0.25          # probabilité de reculer (le reste : elle se fige comme avant)
-  cooldown-seconds:
-    min: 8.0
-    max: 20.0
-  calm-seconds-after: 2.0
-  retreat-speed: 0.18
-  retreat-seconds:
-    min: 1.0
-    max: 2.5
-  retreat-hop-chance: 0.6       # saute en arrière
-  hide-speed: 0.25
-  hide-search-radius: 14.0
-  hide-min-player-distance: 6.0
-  hide-max-travel-seconds: 6.0
-  hide-wait-seconds:
-    min: 4.0
-    max: 12.0
-  hide-leap-chance: 0.5         # bondit vers sa cachette
-  hide-ambush-distance: 9.0     # si tu passes à moins de ça, elle peut bondir de sa cachette
-  hide-ambush-chance-per-second: 0.5
-  hide-pounce-when-seen-chance: 0.35
-
-jump:
-  enabled: true
-  power: 0.45
-  forward: 0.25
-  cooldown-seconds: 1.5
-  lunge-distance: 9.0           # bond final pendant la charge
-  lunge-chance-per-tick: 0.08
-
-# Mini-araignée : à chaque apparition, une chance d'avoir une toute petite version, très rapide, qui s'approche
-# tout près sans qu'on la remarque, se faufile partout et te saute au visage. (/horror mini pour en invoquer une)
-mini:
-  chance: 0.20
-  scale: 0.2                # taille (0.2 = de la taille d'une main)
-  speed-boost: 3.5          # vitesse de déplacement x ce facteur (sinon elle serait trop lente)
-  closest-approach: 2.5     # distance à laquelle elle s'arrête quand on la regarde
-  attack-range: 1.6
-  pounce-distance: 5.0      # portée de ses bonds depuis un mur / plafond
-  see-range-factor: 0.35    # on la repère de beaucoup moins loin (x portée de vue normale)
-  damage-factor: 0.5        # dégâts de morsure x ce facteur
-  spawn-max-chunks: 3.0     # elle apparaît plus près du joueur (en chunks)
-
-# Serveur multijoueur : elle change de victime au lieu de rester sur le même joueur.
-multiplayer:
-  target-switch-min-seconds: 45     # elle garde une cible entre min et max secondes, puis en choisit une autre
-  target-switch-max-seconds: 120
-  switch-after-attack-chance: 0.8   # chance de changer de victime juste après une attaque
-  victim-memory-seconds: 600        # les joueurs visés récemment ont moins de chances d'être re-choisis (spawn compris)
-
-# Murs et plafonds : elle grimpe aux murs, marche au plafond, passe les arêtes, et se jette sur toi d'en haut.
-# (/horror climb force le comportement pour tester)
-climb:
-  enabled: true
-  turn-rate: 0.07               # vitesse de rotation du corps vers une nouvelle surface (radians par tick)
-  sense-interval-ticks: 2       # fréquence de détection des murs / arêtes
-  lock-ticks: 10                # délai minimal entre deux changements de surface (évite les va-et-vient)
-  seek-chance-per-second: 0.10  # quand tu ne la vois pas, chance d'aller chercher un mur à escalader
-  seek-min-distance: 10.0       # distance au joueur à laquelle elle peut décider de grimper
-  seek-max-distance: 60.0
-  seek-wall-range: 18.0         # portée de recherche d'un mur
-  seek-max-seconds: 25.0        # durée max d'une escalade volontaire
-  cooldown-seconds: 20.0        # délai avant de pouvoir recommencer
-  descend-height: 2.5           # si le joueur est plus bas que ça, elle redescend le long des arêtes au lieu de s'arrêter
-  pounce:
-    enabled: true               # bond depuis un mur / le plafond
-    distance: 10.0              # portée du bond
-    drop-distance: 6.0          # sous cette distance elle se jette même si tu la regardes
-    cooldown-seconds: 2.0
-  silk-thread: true             # fil de soie visible quand elle se laisse tomber du plafond
-  scratch-sounds: true          # grattements quand elle est sur un mur / au plafond
-  ceiling-ambush-chance: 0.5    # l'embuscade peut la faire apparaître au plafond, derrière toi
 
 # true = une seule araignée à la fois (/horror spawn remplace l'ancienne)
 single-spider: true

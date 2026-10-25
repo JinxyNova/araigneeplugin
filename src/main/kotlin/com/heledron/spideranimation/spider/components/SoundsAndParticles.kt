@@ -56,9 +56,7 @@ fun setupSoundAndParticles(app: ECS) {
 
         options.sound.step.scale(volume = volumeScale, pitch = pitchScale).play(world, position)
 
-        // le bloc sur lequel la patte se pose est "sous" elle, le long de la normale (au plafond : au-dessus)
-        val surfaceProbe = position.clone().subtract(event.spider.surfaceUp.clone().multiply(1.0e-2))
-        val blockSound = blockStepSound(world, surfaceProbe)
+        val blockSound = blockStepSound(world, position)
         if (blockSound != null) options.sound.stepBlockOverlay
             .withSound(blockSound)
             .scale(volume = volumeScale, pitch = pitchScale)
